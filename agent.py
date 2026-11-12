@@ -24,6 +24,7 @@ from pathlib import Path
 
 from hermes import APP_NAME, __version__
 from hermes.bot import HermesBot
+from hermes.browsing import WebTools
 from hermes.config import ensure_storage, load_settings
 from hermes.connectors import ConnectorRegistry
 from hermes.core import AgentLoop, ApprovalStore
@@ -91,6 +92,15 @@ def preflight(settings, *, verbose: bool = True) -> tuple[bool, list[str]]:
     except Exception as exc:  # noqa: BLE001 - preflight must not fail on this
         notes.append(f"connectors: could not be inspected ({type(exc).__name__})")
 
+    if settings.web_enabled:
+        search = settings.search_provider or "not configured"
+        notes.append(
+            f"web: fetch on, search {search}, "
+            f"browser {'on' if settings.browser_enabled else 'off'}"
+        )
+    else:
+        notes.append("web: disabled (WEB_ENABLED=false)")
+
     if verbose:
         for line in notes:
             print(f"  {line}")
@@ -119,19 +129,21 @@ def build_runtime(settings):
     connectors = ConnectorRegistry(
         db, secrets=settings.secrets, max_chars=settings.max_output_chars
     )
+    webtools = WebTools(settings)
     toolbox = ToolBox(
         workspace,
         runner,
         db,
         max_output_chars=settings.max_output_chars,
         connectors=connectors,
+        webtools=webtools,
     )
     router = build_router(settings)
     approvals = ApprovalStore(ttl=settings.approval_ttl)
     loop = AgentLoop(
         settings, db, router, workspace, runner, toolbox, approvals, app_name=APP_NAME
     )
-    return db, workspace, runner, toolbox, router, approvals, loop, connectors
+    return db, workspace, runner, toolbox, router, approvals, loop, connectors, webtools
 
 
 def start_health_server(
@@ -210,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Settings: %s", settings.redacted_summary())
 
     try:
-        db, workspace, runner, toolbox, router, approvals, loop, connectors = build_runtime(settings)
+        db, workspace, runner, toolbox, router, approvals, loop, connectors, webtools = build_runtime(settings)
     except Exception as exc:  # noqa: BLE001
         log.exception("Startup failed while initialising runtime: %s", exc)
         return 1
@@ -233,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         approvals,
         started_at=started_at,
         connectors=connectors,
+        webtools=webtools,
     )
 
     def shutdown(signum, _frame):

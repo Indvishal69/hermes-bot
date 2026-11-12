@@ -40,6 +40,7 @@ HELP_TEXT = """**{app} — commands**
 `!connect NAME` / `!disconnect NAME` — enable or disable a connector (saved)
 `!connector NAME` — detail; `!connector NAME test` — live check;
 `!connector NAME set key=value` — save a non-secret setting
+`!web <url>` — fetch a page and show what the agent would read
 `!restart` — restart the bot process
 
 Send any other message to give Hermes a task."""
@@ -91,6 +92,7 @@ class HermesBot(discord.Client):
         *,
         started_at: float,
         connectors: ConnectorRegistry | None = None,
+        webtools=None,
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -108,6 +110,7 @@ class HermesBot(discord.Client):
         self.agent_loop = loop
         self.approvals = approvals
         self.connectors = connectors
+        self.webtools = webtools
         self.started_at = started_at
         self._task_lock = asyncio.Lock()
         self._last_task: dict[int, float] = {}
@@ -244,6 +247,9 @@ class HermesBot(discord.Client):
         if command == "!connector":
             await self._cmd_connector(message, arg)
             return True
+        if command == "!web":
+            await self._cmd_web(message, arg)
+            return True
         if command == "!restart":
             await message.channel.send("♻️ Restarting the Hermes process now.")
             self.db.audit(message.author.id, "restart", "owner requested restart")
@@ -264,6 +270,17 @@ class HermesBot(discord.Client):
             f"{'writable' if ws['writable'] else 'READ-ONLY'}",
             "Providers:",
         ]
+        if self.webtools is not None:
+            info = self.webtools.status()
+            search = info["search"]
+            lines.append(
+                "Web: fetch "
+                + ("on" if info["enabled"] else "off")
+                + f", search {search['provider']}"
+                + ("" if search["configured"] else " (not configured)")
+                + f", browser {'on' if info['browser_enabled'] else 'off'}"
+                + ("" if info["browser_enabled"] or not info["browser_installed"] else " (playwright installed)")
+            )
         for row in providers:
             state = "configured" if row["configured"] else "not configured"
             extra = f", cooling down {row['cooldown_seconds']}s" if row.get("cooldown_seconds") else ""
@@ -549,6 +566,26 @@ class HermesBot(discord.Client):
         if info["docs_url"]:
             lines.append(info["docs_url"])
         await self._send(message.channel, "\n".join(lines))
+
+    async def _cmd_web(self, message: discord.Message, arg: str) -> None:
+        if self.webtools is None or not self.webtools.enabled:
+            await message.channel.send("Web access is disabled (WEB_ENABLED=false).")
+            return
+        url = (arg or "").strip()
+        if not url:
+            await message.channel.send("Usage: `!web https://example.com`")
+            return
+        status = await message.channel.send("🌐 Fetching…")
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(self.webtools.preview, url),
+                timeout=self.settings.web_timeout + 15,
+            )
+            await status.edit(content=truncate(self._clean(text), 1_900))
+        except asyncio.TimeoutError:
+            await status.edit(content=f"❌ Fetch timed out after {self.settings.web_timeout}s.")
+        except Exception as exc:  # noqa: BLE001
+            await status.edit(content=self._clean(f"❌ {exc}"))
 
     # -- approvals ----------------------------------------------------------
     async def _cmd_approval(self, message: discord.Message, command: str, arg: str) -> None:

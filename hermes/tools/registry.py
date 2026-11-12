@@ -153,12 +153,14 @@ class ToolBox:
         *,
         max_output_chars: int = 7_000,
         connectors: Any | None = None,
+        webtools: Any | None = None,
     ):
         self.workspace = workspace
         self.runner = runner
         self.db = db
         self.max_output_chars = max_output_chars
         self.connectors = connectors
+        self.webtools = webtools
 
     # -- specs --------------------------------------------------------------
     def connector_specs(self) -> dict[str, dict[str, Any]]:
@@ -166,13 +168,23 @@ class ToolBox:
             return {}
         return self.connectors.tool_specs()
 
+    def web_specs(self) -> dict[str, dict[str, Any]]:
+        if self.webtools is None:
+            return {}
+        return self.webtools.specs()
+
     def specs(self) -> dict[str, dict[str, Any]]:
         merged = dict(TOOL_SPECS)
+        merged.update(self.web_specs())
         merged.update(self.connector_specs())
         return merged
 
     def execute(self, action: dict[str, Any], *, project: str = "default") -> ToolResult:
         name = str(action.get("action", "")).strip()
+
+        # Web tools are dynamic: only offered when they can work.
+        if self.webtools is not None and name in self.webtools.specs():
+            return self._execute_web(name, action)
 
         # Connector tools are dynamic: only offered while active.
         if self.connectors is not None and name in self.connectors.active_tools():
@@ -204,6 +216,14 @@ class ToolBox:
             return ToolResult(ok=False, action=name, text=f"{name} rejected: {exc}")
         except (OSError, ValueError) as exc:
             return ToolResult(ok=False, action=name, text=f"{name} failed: {type(exc).__name__}: {exc}")
+
+    def _execute_web(self, name: str, action: dict[str, Any]) -> ToolResult:
+        args = {key: value for key, value in action.items() if key != "action"}
+        try:
+            text = self.webtools.execute(name, args)
+            return ToolResult(ok=True, action=name, text=truncate(text, self.max_output_chars))
+        except Exception as exc:  # noqa: BLE001 - report, never raise into the loop
+            return ToolResult(ok=False, action=name, text=f"{name} failed: {exc}")
 
     def _execute_connector(self, name: str, action: dict[str, Any]) -> ToolResult:
         # "reason" explains the call to the owner; it is not a tool argument.

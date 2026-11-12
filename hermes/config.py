@@ -90,6 +90,17 @@ class Settings:
     command_timeout: int = 45
     allow_git_push: bool = False
     approval_ttl: int = 900
+    # --- web access --------------------------------------------------------
+    web_enabled: bool = True
+    web_timeout: int = 20
+    web_max_bytes: int = 2_000_000
+    web_max_chars: int = 7_000
+    web_allowed_domains: tuple[str, ...] = ()
+    browser_enabled: bool = False
+    browser_timeout: int = 30
+    search_provider: str = ""
+    search_api_key: str = ""
+    searxng_url: str = ""
     # --- service -----------------------------------------------------------
     port: int = 10_000
     log_level: str = "INFO"
@@ -130,6 +141,7 @@ class Settings:
             self.vercel_token,
             self.cloudflare_api_token,
             self.huggingface_token,
+            self.search_api_key,
         )
         return tuple(value for value in candidates if value and len(value) >= 8)
 
@@ -149,6 +161,9 @@ class Settings:
             "workspace_dir": str(self.workspace_dir),
             "providers_configured": self.providers_configured,
             "allow_git_push": self.allow_git_push,
+            "web_enabled": self.web_enabled,
+            "browser_enabled": self.browser_enabled,
+            "search_provider": self.search_provider or "(none)",
         }
 
 
@@ -206,6 +221,20 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         except ValueError:
             problems.append("TEMPERATURE must be a number; using 0.2.")
 
+    search_provider = _get(env, "SEARCH_PROVIDER").lower()
+    if search_provider not in ("", "tavily", "brave", "searxng"):
+        problems.append(
+            "SEARCH_PROVIDER must be tavily, brave or searxng "
+            f"(got {search_provider!r}); web search stays disabled."
+        )
+        search_provider = ""
+    if search_provider == "searxng" and not _get(env, "SEARXNG_URL"):
+        problems.append("SEARCH_PROVIDER=searxng needs SEARXNG_URL.")
+        search_provider = ""
+    if search_provider in ("tavily", "brave") and not _get(env, "SEARCH_API_KEY"):
+        problems.append(f"SEARCH_PROVIDER={search_provider} needs SEARCH_API_KEY.")
+        search_provider = ""
+
     settings = Settings(
         discord_token=discord_token,
         allowed_user_id=allowed_user_id,
@@ -227,6 +256,20 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         command_timeout=_get_int(env, "COMMAND_TIMEOUT", 45, problems, 1, 600),
         allow_git_push=_get_bool(env, "ALLOW_GIT_PUSH", False),
         approval_ttl=_get_int(env, "APPROVAL_TTL", 900, problems, 30, 86_400),
+        web_enabled=_get_bool(env, "WEB_ENABLED", True),
+        web_timeout=_get_int(env, "WEB_TIMEOUT", 20, problems, 5, 120),
+        web_max_bytes=_get_int(env, "WEB_MAX_BYTES", 2_000_000, problems, 10_000, 10_000_000),
+        web_max_chars=_get_int(env, "WEB_MAX_CHARS", 7_000, problems, 500, 60_000),
+        web_allowed_domains=tuple(
+            part.strip().lower()
+            for part in _get(env, "WEB_ALLOWED_DOMAINS").split(",")
+            if part.strip()
+        ),
+        browser_enabled=_get_bool(env, "BROWSER_ENABLED", False),
+        browser_timeout=_get_int(env, "BROWSER_TIMEOUT", 30, problems, 5, 180),
+        search_provider=search_provider,
+        search_api_key=_get(env, "SEARCH_API_KEY"),
+        searxng_url=_get(env, "SEARXNG_URL"),
         port=_get_int(env, "PORT", 10_000, problems, 1, 65_535),
         log_level=_get(env, "LOG_LEVEL", "INFO").upper() or "INFO",
         provider_cooldown=_get_int(env, "PROVIDER_COOLDOWN", 60, problems, 0, 3_600),
