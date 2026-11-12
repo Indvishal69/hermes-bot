@@ -1,237 +1,237 @@
-import os
-import json
-import sqlite3
-import asyncio
-import subprocess
+#!/usr/bin/env python3
+"""Hermes 3.0 entry point.
+
+Starts:
+* the Discord bot (owner-only),
+* the Flask health server on ``$PORT`` (Render health checks),
+* SQLite with migrations, and the workspace/command sandbox.
+
+Run modes:
+    python agent.py            # normal service
+    python agent.py --check    # validate configuration and storage, then exit
+    python agent.py --version
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import signal
+import sys
 import threading
-import requests
-from flask import Flask
-import discord
+import time
+from pathlib import Path
 
-# 1. 24/7 Keep-Alive Web Server
-app = Flask(__name__)
+from hermes import APP_NAME, __version__
+from hermes.bot import HermesBot
+from hermes.config import ensure_storage, load_settings
+from hermes.core import AgentLoop, ApprovalStore
+from hermes.db import Database
+from hermes.providers import build_router
+from hermes.tools import CommandRunner, ToolBox, Workspace
+from hermes.web import create_app
 
-@app.route("/")
-def home():
-    return "Hermes Super-Advanced Agent 24/7 Online!"
+log = logging.getLogger("hermes")
 
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run_web, daemon=True).start()
+def configure_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+        stream=sys.stdout,
+        force=True,
+    )
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    logging.getLogger("discord").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# 2. SQLite Database for Long-Term Memory (Remembers Vishal & past chats)
-DB_FILE = "memory.db"
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS memory 
-                 (user_id TEXT, role TEXT, content TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS connectors 
-                 (key TEXT PRIMARY KEY, value TEXT)''')
-    conn.commit()
-    conn.close()
+def preflight(settings, *, verbose: bool = True) -> tuple[bool, list[str]]:
+    """Check configuration and storage without touching Discord."""
+    notes: list[str] = []
+    ok = True
 
-init_db()
+    for problem in settings.problems:
+        notes.append(f"config: {problem}")
+        ok = False
 
-def load_connectors_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT key, value FROM connectors")
-    rows = c.fetchall()
-    conn.close()
-    data = {}
-    for k, v in rows:
-        os.environ[k] = v
-        data[k] = v
-    return data
-
-def save_connector_db(key, value):
-    os.environ[key] = str(value)
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("REPLACE INTO connectors (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
-
-load_connectors_db()
-
-def get_chat_history(user_id):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT role, content FROM memory WHERE user_id = ? ORDER BY rowid DESC LIMIT 10", (str(user_id),))
-    rows = c.fetchall()
-    conn.close()
-    history = []
-    for role, content in reversed(rows):
-        history.append({"role": role, "content": content})
-    return history
-
-def save_chat_history(user_id, role, content):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO memory (user_id, role, content) VALUES (?, ?, ?)", (str(user_id), role, content))
-    conn.commit()
-    conn.close()
-
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "0"))
-ACTIVE_PROVIDER = os.environ.get("ACTIVE_PROVIDER", "groq")
-
-# 3. AI Providers (Groq & Gemini Auto-Fallback)
-def try_groq(messages, api_key):
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=15)
-    if r.status_code != 200:
-        raise Exception(f"Groq Error ({r.status_code})")
-    
-    models = [m["id"] for m in r.json().get("data", [])]
-    chat_models = [m for m in models if not any(s in m.lower() for s in ["whisper", "tts", "embed", "vision"])]
-    
-    priority = ["llama-3.3", "qwen", "deepseek", "llama-3.1", "70b", "mixtral", "gemma"]
-    def score(m):
-        for idx, p in enumerate(priority):
-            if p in m.lower():
-                return 100 - idx
-        return 0
-    chat_models.sort(key=score, reverse=True)
-    
-    for chosen in chat_models[:5]:
+    for folder in (settings.data_dir, settings.workspace_dir, settings.backups_dir):
         try:
-            res = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json={"model": chosen, "messages": messages, "temperature": 0.3},
-                timeout=45
-            )
-            if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"].strip(), f"groq ({chosen})"
-        except Exception:
-            continue
-    raise Exception("All Groq models failed")
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / ".hermes-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            notes.append(f"storage: {folder} writable")
+        except OSError as exc:
+            notes.append(f"storage: {folder} NOT writable ({type(exc).__name__}: {exc})")
+            ok = False
 
-def try_gemini(messages, api_key):
-    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    r = requests.get(list_url, timeout=15)
-    if r.status_code != 200:
-        raise Exception(f"Gemini Key Error ({r.status_code})")
-    
-    all_m = r.json().get("models", [])
-    valid = [m["name"] for m in all_m if "generateContent" in m.get("supportedGenerationMethods", []) and "gemini" in m["name"].lower()]
-    
-    prompt_text = "\n\n".join([f"{m['role'].upper()}:\n{m['content']}" for m in messages])
-    for chosen in valid[:5]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/{chosen}:generateContent?key={api_key}"
-        try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt_text}]}]}, timeout=45)
-            if res.status_code == 200:
-                return res.json()["candidates"][0]["content"]["parts"][0]["text"].strip(), f"gemini ({chosen.replace('models/', '')})"
-        except Exception:
-            continue
-    raise Exception("All Gemini models failed")
-
-def call_ai(messages):
-    global ACTIVE_PROVIDER
-    providers = [ACTIVE_PROVIDER] + [p for p in ["groq", "gemini"] if p != ACTIVE_PROVIDER]
-    errors = []
-    
-    for prov in providers:
-        try:
-            if prov == "groq" and os.environ.get("GROQ_API_KEY"):
-                return try_groq(messages, os.environ.get("GROQ_API_KEY"))
-            elif prov == "gemini" and os.environ.get("GEMINI_API_KEY"):
-                return try_gemini(messages, os.environ.get("GEMINI_API_KEY"))
-        except Exception as e:
-            errors.append(f"{prov}: {str(e)}")
-            
-    return "❌ AI Error: " + " | ".join(errors), "none"
-
-def run_terminal(command):
+    db = Database(settings.db_path)
     try:
-        res = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=120, env=os.environ.copy()
-        )
-        out = (res.stdout or "") + (res.stderr or "")
-        return out[:1800] if out.strip() else "Executed successfully (no output)."
-    except Exception as e:
-        return f"Error: {str(e)}"
+        version = db.init()
+        notes.append(f"database: {settings.db_path} ready (schema v{version})")
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"database: FAILED ({type(exc).__name__}: {exc})")
+        ok = False
 
-# 4. Discord Bot
-intents = discord.Intents.default()
-intents.message_content = True
-bot = discord.Client(intents=intents)
+    for name, present in settings.providers_configured.items():
+        notes.append(f"provider {name}: {'configured' if present else 'not configured'}")
 
-@bot.event
-async def on_ready():
-    print(f"Super-Advanced Hermes Online as {bot.user}")
+    if verbose:
+        for line in notes:
+            print(f"  {line}")
+    return ok, notes
 
-@bot.event
-async def on_message(message):
-    global ACTIVE_PROVIDER
-    if message.author == bot.user or message.author.id != ALLOWED_USER_ID:
-        return
 
-    text = message.content.strip()
+def build_runtime(settings):
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.workspace_dir.mkdir(parents=True, exist_ok=True)
+    settings.backups_dir.mkdir(parents=True, exist_ok=True)
 
-    if text.startswith("!connect "):
-        parts = text.split(" ", 2)
-        if len(parts) < 3:
-            await message.channel.send("⚠️ Format: `!connect KEY_NAME VALUE`")
-            return
-        key_name, key_val = parts[1].upper().strip(), parts[2].strip()
-        save_connector_db(key_name, key_val)
+    db = Database(settings.db_path)
+    db.init()
+
+    workspace = Workspace(
+        settings.workspace_dir,
+        max_file_bytes=settings.max_file_bytes,
+        max_output_chars=settings.max_output_chars,
+    )
+    runner = CommandRunner(
+        settings.workspace_dir,
+        timeout=settings.command_timeout,
+        max_output_chars=settings.max_output_chars,
+        allow_git_push=settings.allow_git_push,
+    )
+    toolbox = ToolBox(
+        workspace, runner, db, max_output_chars=settings.max_output_chars
+    )
+    router = build_router(settings)
+    approvals = ApprovalStore(ttl=settings.approval_ttl)
+    loop = AgentLoop(
+        settings, db, router, workspace, runner, toolbox, approvals, app_name=APP_NAME
+    )
+    return db, workspace, runner, toolbox, router, approvals, loop
+
+
+def start_health_server(settings, db, workspace, router, started_at: float) -> threading.Thread:
+    def status_hook():
+        stats = db.stats()
+        return {
+            "database_schema": stats["schema_version"],
+            "workspace_files": workspace.info()["files"],
+            "providers": [row["provider"] for row in router.status() if row["configured"]],
+        }
+
+    app = create_app(
+        settings,
+        router=router,
+        db=db,
+        workspace=workspace,
+        started_at=started_at,
+        status_hook=status_hook,
+    )
+
+    def serve() -> None:
         try:
-            await message.delete()
-        except Exception:
+            app.run(
+                host="0.0.0.0",
+                port=settings.port,
+                threaded=True,
+                use_reloader=False,
+                debug=False,
+            )
+        except OSError as exc:
+            log.error("Health server could not bind port %s: %s", settings.port, exc)
+
+    thread = threading.Thread(target=serve, daemon=True, name="hermes-health")
+    thread.start()
+    log.info("Health server listening on 0.0.0.0:%s (/health)", settings.port)
+    return thread
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=f"{APP_NAME} {__version__}")
+    parser.add_argument("--check", action="store_true", help="validate config and storage, then exit")
+    parser.add_argument("--version", action="store_true", help="print version and exit")
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print(f"{APP_NAME} {__version__}")
+        return 0
+
+    settings = load_settings()
+    configure_logging(settings.log_level)
+
+    # A missing/unwritable DATA_DIR must not take the bot offline.
+    settings, storage_warnings = ensure_storage(settings)
+    for warning in storage_warnings:
+        log.warning("%s", warning)
+
+    if args.check:
+        print(f"{APP_NAME} {__version__} — preflight")
+        ok, _ = preflight(settings)
+        print("RESULT:", "OK" if ok else "PROBLEMS FOUND")
+        return 0 if ok else 1
+
+    ok, _ = preflight(settings, verbose=False)
+    if not ok:
+        log.error("Refusing to start — configuration or storage problems:")
+        for problem in settings.problems:
+            log.error("  • %s", problem)
+        return 1
+
+    started_at = time.time()
+    log.info("Starting %s %s", APP_NAME, __version__)
+    log.info("Settings: %s", settings.redacted_summary())
+
+    try:
+        db, workspace, runner, toolbox, router, approvals, loop = build_runtime(settings)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Startup failed while initialising runtime: %s", exc)
+        return 1
+
+    start_health_server(settings, db, workspace, router, started_at)
+
+    bot = HermesBot(
+        settings,
+        db,
+        router,
+        workspace,
+        runner,
+        toolbox,
+        loop,
+        approvals,
+        started_at=started_at,
+    )
+
+    def shutdown(signum, _frame):
+        log.warning("Received signal %s — shutting down", signum)
+        try:
+            db.audit("system", "shutdown", f"signal {signum}")
+        finally:
+            raise SystemExit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, shutdown)
+        except (ValueError, OSError):  # pragma: no cover - non-main thread
             pass
-        await message.channel.send(f"✅ `{key_name}` successfully saved to database & environment!")
-        return
 
-    if text == "!connectors":
-        keys = [k for k in os.environ.keys() if any(k.endswith(s) for s in ["_KEY", "_TOKEN", "_SECRET", "_ID"])]
-        await message.channel.send(f"🔌 **Active Connected Keys:** `{', '.join(sorted(keys))}`")
-        return
+    try:
+        bot.run(settings.discord_token, log_handler=None)
+    except KeyboardInterrupt:
+        log.info("Interrupted by user")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Bot stopped unexpectedly: %s", exc)
+        return 1
+    finally:
+        try:
+            db.audit("system", "stop", "process exited")
+        except Exception:  # noqa: BLE001
+            pass
+    return 0
 
-    # Save user message to memory database
-    save_chat_history(message.author.id, "user", text)
-    history = get_chat_history(message.author.id)
 
-    active_tokens = [k for k in os.environ.keys() if k.endswith("_TOKEN") or k.endswith("_KEY")]
-    sys_prompt = f"""You are Hermes, an elite autonomous full-stack Linux AI agent created for Vishal.
-- Connected environment tokens: {', '.join(active_tokens)}
-- You have persistent memory database. You know the user's name is Vishal.
-- When you need to run a Linux terminal command, reply with ONLY: RUN_CMD: <command>
-- When you need to send a generated file to Discord, reply with ONLY: SEND_FILE: <filepath>
-- Do NOT wrap commands in markdown code blocks.
-- Reply cleanly and professionally."""
-
-    messages = [{"role": "system", "content": sys_prompt}] + history
-    status_msg = await message.channel.send("⚙️ *Thinking...*")
-
-    for _ in range(8):
-        reply, used_prov = await asyncio.to_thread(call_ai, messages)
-        clean_reply = reply.strip()
-
-        if clean_reply.startswith("RUN_CMD:"):
-            cmd = clean_reply.replace("RUN_CMD:", "", 1).strip()
-            await message.channel.send(f"💻 `{cmd[:180]}`")
-            output = await asyncio.to_thread(run_terminal, cmd)
-            messages.append({"role": "assistant", "content": clean_reply})
-            messages.append({"role": "user", "content": f"Terminal Output:\n{output}"})
-        elif clean_reply.startswith("SEND_FILE:"):
-            filepath = clean_reply.replace("SEND_FILE:", "", 1).strip()
-            if os.path.exists(filepath):
-                await message.channel.send(file=discord.File(filepath))
-                messages.append({"role": "assistant", "content": clean_reply})
-                messages.append({"role": "user", "content": f"File {filepath} sent."})
-            else:
-                messages.append({"role": "user", "content": f"Error: File not found."})
-        else:
-            save_chat_history(message.author.id, "assistant", clean_reply)
-            await status_msg.edit(content=f"✅ **Done (via `{used_prov}`):**\n{clean_reply[:1900]}")
-            break
-
-bot.open_db = init_db
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,64 @@
+# Render blueprint for Hermes 3.0
+#
+# IMPORTANT — read docs/DEPLOYMENT.md before deploying.
+# The free plan has NO persistent disk, so DATA_DIR must stay inside the app
+# directory and the SQLite database is reset on every deploy/restart. The
+# original blueprint pointed DATA_DIR at /var/data without mounting a disk,
+# which fails on the free plan.
+
+services:
+  - type: web
+    name: hermes-agent
+    runtime: python
+    plan: starter            # 'free' works but loses data on every restart (see docs)
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python agent.py
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+      - key: ACTIVE_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      # Leave GEMINI_MODEL unset to auto-discover a working model for your key.
+      - key: GEMINI_MODEL
+        sync: false
+      - key: MAX_AGENT_STEPS
+        value: "8"
+      - key: COMMAND_TIMEOUT
+        value: "45"
+      - key: LOG_LEVEL
+        value: INFO
+      # Secrets: set these in the Render dashboard, never in this file.
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: ALLOWED_USER_ID
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # Optional integrations
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: VERCEL_TOKEN
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+
+# If you are on a paid plan, attach a disk and point DATA_DIR at its mount path:
+#
+#    disk:
+#      name: hermes-data
+#      mountPath: /opt/render/project/src/data
+#      sizeGB: 1
+#
+# then keep DATA_DIR at that same mount path.

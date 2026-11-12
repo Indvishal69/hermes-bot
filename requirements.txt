@@ -1,5 +1,9 @@
-discord.py
-openai
-flask
-requests
-huggingface_hub
+# Hermes 3.0 runtime dependencies
+# Python 3.11+ (3.12 recommended; Render's python runtime supports both)
+
+discord.py>=2.4,<3
+Flask>=3.0,<4
+requests>=2.31,<3
+# Google's official Gemini SDK. Do not pin <2: 1.x predates current model
+# families and endpoint behaviour, which is one reason Gemini calls failed.
+google-genai>=1.0,<4
