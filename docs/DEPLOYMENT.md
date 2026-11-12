@@ -56,6 +56,9 @@ Steps:
 5. Open `https://<service>.onrender.com/health` — expect
    `{"ok": true, "database": true, "workspace_writable": true, ...}`.
 6. In Discord: `!health`, `!models`, `!testai`.
+   If `GROQ_MODEL` names a retired model, the log shows
+   `Groq model selection: configured model '...' is not available; using ...` and the
+   bot keeps working — `!model` shows the model actually in use.
 
 ## Option B — Render free, kept awake by an external pinger
 

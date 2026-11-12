@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-154 passed in 24.21s
+180 passed in 26.19s
 ```
 
 Coverage by area (all passing):
@@ -44,6 +44,7 @@ Coverage by area (all passing):
 | `tests/test_router.py` (11) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
 | `tests/test_gemini.py` (26) | name normalisation; text-model filtering (tts/live/image/embedding/transcribe/computer-use excluded, `supportedActions` respected); configured-model preference; fallback to preferred; auto-selection; flash preference; empty-list behaviour; **roles preserved** (`user/model/user`), consecutive turns merged, `system_instruction` passed; retired model triggers re-discovery + retry; auth error not retried; quota classified retryable; `finish_reason=SAFETY` reported as blocked; listing error surfaced |
 | `tests/test_loop.py` (12) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
+| `tests/test_groq.py` (26) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
 | `tests/test_bot.py` (11) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running |
 | `tests/test_web_and_utils.py` (10) | `/health` 200 + payload; **no paths or secrets in the response**; unhealthy database → 503; `/ready` and `/`; redaction of key shapes; JSON extraction (plain, fenced, embedded, malformed); backoff growth and cap; truncate/chunk; human helpers |
 
@@ -159,3 +160,53 @@ FAILED tests/test_bot.py::test_task_survives_discord_overwriting_client_loop
 and passes after the rename. One test also scans `discord.Client.__init__` and
 `_async_setup_hook` for assigned attribute names and fails if the bot ever shadows
 one of them again.
+
+## 9. Second production finding: Groq model retired (3.0.2)
+
+Your `!testai` screenshot showed:
+
+```
+❌ groq: [model HTTP 404] groq: HTTP 404: {"error":{"message":"The model
+llama-3.3-70b-versatile does not exist or you do not have access to it.", ...}}
+❌ gemini: timed out after 75s
+```
+
+Two separate causes:
+
+1. **Groq retired the model.** `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`
+   were shut down for free and developer tiers on 16 August 2026; Groq's published
+   replacement is `openai/gpt-oss-120b`. Hermes 3.0.0/3.0.1 shipped that retired ID as
+   the default and, unlike Gemini, did not check model availability first.
+2. **A 503 burst outlived the probe.** Gemini returned `503 UNAVAILABLE — This model
+   is currently experiencing high demand`. That is retryable and was retried, but each
+   attempt had no HTTP timeout of its own, so three attempts ran past the 75s probe
+   limit and surfaced as a bare "timed out".
+
+Fixes:
+
+* `GroqProvider.resolve_model()` lists `GET /openai/v1/models`, keeps the configured ID
+  only if it is really there, otherwise picks `openai/gpt-oss-120b` (or the first
+  preferred chat model the key can use), and re-discovers once on `404 model_not_found`.
+* Default `GROQ_MODEL` is now `openai/gpt-oss-120b`; a stale value in your Render env
+  is corrected automatically at runtime instead of failing every message.
+* Both providers now cap each HTTP attempt (50s default, 30s in `!testai`), so retries
+  fit inside `AI_TIMEOUT`; a timeout message now includes the last provider error.
+* Model selection is shared by both providers (`providers/base.py::choose_model`).
+
+Verified against local mock APIs, end to end:
+
+```
+reply: live-ok model=openai/gpt-oss-120b
+model after recovery: openai/gpt-oss-120b
+models endpoint hits: 1 | chat attempts: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b']
+```
+
+and the per-attempt timeout is enforced rather than assumed — a server that sleeps
+20s is abandoned at the configured bound:
+
+```
+raised after 10.0s: ProviderError
+```
+
+Gemini still completes through the real SDK with the new per-request timeout
+(`gemini reply: gemini-ok ...`).

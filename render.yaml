@@ -22,8 +22,9 @@ services:
         value: /opt/render/project/src/data
       - key: ACTIVE_PROVIDER
         value: groq
+      # A retired/stale ID is detected and replaced automatically at runtime.
       - key: GROQ_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       # Leave GEMINI_MODEL unset to auto-discover a working model for your key.
       - key: GEMINI_MODEL
         sync: false

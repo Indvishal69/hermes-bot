@@ -28,6 +28,9 @@ Flask:  /health  /ready  /           (Render health checks)
   preserved, quota/auth/model/blocked errors reported verbatim, retry with
   backoff, automatic re-discovery if a model ID is retired.
 * **Provider fallback** with per-provider cooldown and a `!model` switch.
+* **Model-availability checks for both providers** — Groq and Gemini IDs are checked
+  against the account's model list and a working replacement is chosen when one is
+  retired (Groq shut down `llama-3.3-70b-versatile` on 16 Aug 2026).
 * **Structured tool calling** — 14 validated actions; unknown keys are ignored and
   unknown actions refused. No arbitrary code path from model text.
 * **Approval gate** for every shell command, with expiry, denial path and audit log.
@@ -130,7 +133,7 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `ACTIVE_PROVIDER` | `groq` | `groq` or `gemini`; the other is the fallback |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Any Groq chat model your key can use |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Any Groq chat model; if the ID is retired or not on your plan, a working chat model is selected automatically |
 | `GEMINI_MODEL` | *(empty)* | Empty = auto-discover a text model for the key |
 | `GEMINI_API_BASE` | *(empty)* | Only for a compatible proxy/endpoint |
 | `MAX_AGENT_STEPS` | `8` | Tool steps per task (1–25) |
@@ -175,7 +178,7 @@ hermes/
   bot.py                     Discord commands and status messages (agent loop is `agent_loop`)
   web.py                     Flask health endpoints
   integrations/              GitHub, Render, Vercel, Cloudflare, Hugging Face
-tests/                       154 pytest tests (no network, no credentials needed)
+tests/                       180 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
