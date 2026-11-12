@@ -2,7 +2,7 @@
 
 from .base import LLMResult, Provider, ProviderError, split_system
 from .gemini import GeminiProvider, is_text_model, select_model
-from .groq import GroqProvider
+from .groq import GroqProvider, is_chat_model, select_model as select_groq_model
 from .router import Router
 
 __all__ = [
@@ -15,6 +15,8 @@ __all__ = [
     "Router",
     "is_text_model",
     "select_model",
+    "is_chat_model",
+    "select_groq_model",
 ]
 
 
@@ -26,6 +28,7 @@ def build_router(settings, *, session=None) -> Router:
             settings.groq_api_key,
             settings.groq_model,
             session=session,
+            model_cache_ttl=settings.model_cache_ttl,
             secrets=settings.secrets,
         )
     if settings.gemini_api_key:

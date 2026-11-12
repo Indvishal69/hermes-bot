@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable, Iterable
 
 # Error kinds, used to decide whether a fallback/retry makes sense.
 AUTH = "auth"
@@ -100,6 +100,49 @@ class Provider(ABC):
             "configured": self.configured(),
             "model": self.current_model(),
         }
+
+
+def choose_model(
+    available: Iterable[str],
+    configured: str,
+    *,
+    preferred: Iterable[str],
+    usable: Callable[[str], bool],
+    label: str = "model",
+    fallback_key: Callable[[str], Any] | None = None,
+) -> tuple[str | None, str]:
+    """Pick a model ID the API key can actually use.
+
+    Order: the configured model if the API lists it, then the preferred list,
+    then any usable model (optionally ranked by ``fallback_key``). Returns
+    ``(model, reason)``; ``model`` is ``None`` only when nothing can be used.
+    """
+    configured = (configured or "").strip()
+    names = [str(name).strip() for name in available if str(name).strip()]
+
+    if not names:
+        if configured:
+            return configured, "model list unavailable; trying the configured model"
+        return None, "no models reported by the API"
+
+    if configured and configured in names:
+        return configured, "configured model is available"
+
+    preferred_name = next((name for name in preferred if name in names), None)
+    if preferred_name:
+        reason = (
+            f"configured model '{configured}' is not available; using {preferred_name}"
+            if configured
+            else f"auto-selected {preferred_name}"
+        )
+        return preferred_name, reason
+
+    remaining = [name for name in names if usable(name)]
+    if remaining:
+        chosen = min(remaining, key=fallback_key) if fallback_key else remaining[0]
+        return chosen, f"auto-selected {chosen} (no preferred model listed)"
+
+    return None, f"the API key exposes no usable {label}"
 
 
 def split_system(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]]:

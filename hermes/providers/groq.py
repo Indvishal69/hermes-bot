@@ -1,14 +1,21 @@
 """Groq provider (OpenAI-compatible chat completions).
 
-Uses ``requests`` directly so retries, error classification and model
-discovery are explicit rather than hidden behind a client.
+Uses ``requests`` directly so retries, error classification and **model
+discovery** are explicit.
+
+Model discovery matters as much as it does for Gemini: Groq retires model IDs on
+a published schedule (``llama-3.3-70b-versatile`` and ``llama-3.1-8b-instant``
+were shut down for free/developer tiers on 16 August 2026, replaced by
+``openai/gpt-oss-120b``). A hardcoded default therefore stops working without
+warning, so the configured model is checked against
+``GET /openai/v1/models`` and a working chat model is chosen when it is gone.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Iterable
 
 import requests
 
@@ -21,12 +28,52 @@ from .base import (
     QUOTA,
     Provider,
     ProviderError,
+    choose_model,
     split_system,
 )
 
 log = logging.getLogger("hermes.providers.groq")
 
 API_BASE = "https://api.groq.com/openai/v1"
+
+# Preference order when the configured model is unavailable.
+PREFERRED_CHAT_MODELS = (
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "qwen/qwen3.6-27b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+)
+
+# Model families that cannot answer a chat completion.
+NON_CHAT_MARKERS = (
+    "whisper",
+    "tts",
+    "orpheus",
+    "guard",
+    "embed",
+    "rerank",
+)
+
+
+def is_chat_model(name: str) -> bool:
+    """True when *name* looks like a Groq chat/completion model."""
+    model = (name or "").strip().lower()
+    if not model:
+        return False
+    return not any(marker in model for marker in NON_CHAT_MARKERS)
+
+
+def select_model(available: Iterable[str], configured: str = "") -> tuple[str | None, str]:
+    """Choose a usable Groq chat model. Pure function, unit tested."""
+    return choose_model(
+        available,
+        configured,
+        preferred=PREFERRED_CHAT_MODELS,
+        usable=is_chat_model,
+        label="chat model",
+    )
 
 
 class GroqProvider(Provider):
@@ -35,20 +82,23 @@ class GroqProvider(Provider):
     def __init__(
         self,
         api_key: str,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "openai/gpt-oss-120b",
         *,
         session: requests.Session | None = None,
         max_retries: int = 3,
+        model_cache_ttl: int = 3600,
         secrets: tuple[str, ...] = (),
     ):
         self.api_key = api_key
-        self.model = model
+        self.model = (model or "").strip()
         self.max_retries = max_retries
+        self.model_cache_ttl = model_cache_ttl
         self._session = session or requests.Session()
         self._secrets = secrets
         self._models_cache: list[str] = []
         self._models_ts = 0.0
         self._models_error: str = ""
+        self._resolved_reason: str = ""
 
     # -- helpers ------------------------------------------------------------
     def configured(self) -> bool:
@@ -74,15 +124,17 @@ class GroqProvider(Provider):
             return MODEL
         if status >= 500:
             return NETWORK
-        if status == 400:
-            return OTHER
         return OTHER
 
     # -- models -------------------------------------------------------------
     def list_models(self, *, refresh: bool = False) -> list[str]:
         if not self.configured():
             return []
-        if not refresh and self._models_cache and time.time() - self._models_ts < 3600:
+        if (
+            not refresh
+            and self._models_cache
+            and time.time() - self._models_ts < self.model_cache_ttl
+        ):
             return list(self._models_cache)
         try:
             response = self._session.get(
@@ -92,16 +144,17 @@ class GroqProvider(Provider):
                 self._models_error = self._clean(
                     f"HTTP {response.status_code}: {response.text[:400]}"
                 )
+                log.warning("Groq model listing failed: %s", self._models_error)
                 return list(self._models_cache)
             payload = response.json()
-            models = sorted(
+            ids = sorted(
                 item.get("id", "")
                 for item in payload.get("data", [])
                 if isinstance(item, dict) and item.get("id")
             )
-            self._models_cache = [m for m in models if m]
+            self._models_cache = [name for name in ids if name]
             self._models_ts = time.time()
-            self._models_error = ""
+            self._models_error = "" if self._models_cache else "API returned no models"
         except (requests.RequestException, ValueError) as exc:
             self._models_error = self._clean(f"{type(exc).__name__}: {exc}")
             log.warning("Groq model listing failed: %s", self._models_error)
@@ -110,7 +163,41 @@ class GroqProvider(Provider):
     def models_error(self) -> str:
         return self._models_error
 
+    def selection_reason(self) -> str:
+        return self._resolved_reason
+
+    def resolve_model(self, *, refresh: bool = False) -> str:
+        """Pick a chat model that this API key can actually use."""
+        models = self.list_models(refresh=refresh)
+        chosen, reason = select_model(models, self.model)
+        self._resolved_reason = reason
+        if not chosen:
+            raise ProviderError(
+                self.name,
+                f"no usable chat model ({reason}). {self._models_error}".strip(),
+                kind=MODEL,
+            )
+        if chosen != self.model:
+            log.warning("Groq model selection: %s", reason)
+        self.model = chosen
+        return chosen
+
     # -- chat ---------------------------------------------------------------
+    def _payload(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> dict[str, Any]:
+        system, turns = split_system(messages)
+        payload_messages: list[dict[str, str]] = []
+        if system:
+            payload_messages.append({"role": "system", "content": system})
+        payload_messages.extend(turns)
+        return {
+            "model": self.model,
+            "messages": payload_messages,
+            "temperature": temperature,
+            # ``max_completion_tokens`` is accepted by every current chat model;
+            # ``max_tokens`` is rejected by some of them.
+            "max_completion_tokens": max_tokens,
+        }
+
     def complete(
         self,
         messages: list[dict[str, str]],
@@ -123,27 +210,25 @@ class GroqProvider(Provider):
             raise ProviderError(self.name, "GROQ_API_KEY is not configured", kind=AUTH)
 
         system, turns = split_system(messages)
-        payload_messages: list[dict[str, str]] = []
-        if system:
-            payload_messages.append({"role": "system", "content": system})
-        payload_messages.extend(turns)
-        if not payload_messages:
+        if not system and not turns:
             raise ProviderError(self.name, "No messages to send", kind=OTHER)
 
-        payload = {
-            "model": self.model,
-            "messages": payload_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        model = self.model or self.resolve_model()
+        # Bound every attempt so the retry loop cannot outlive the caller's
+        # AI_TIMEOUT.
+        per_attempt = max(10, min(int(timeout), 50))
+        resolved_once = False
         last_error: ProviderError | None = None
+
         for attempt in range(1, self.max_retries + 1):
+            payload = self._payload(messages, temperature, max_tokens)
+            payload["model"] = model
             try:
                 response = self._session.post(
                     f"{API_BASE}/chat/completions",
                     headers=self._headers(),
                     json=payload,
-                    timeout=(10, timeout),
+                    timeout=(10, per_attempt),
                 )
             except requests.RequestException as exc:
                 last_error = ProviderError(
@@ -154,23 +239,33 @@ class GroqProvider(Provider):
             else:
                 if response.status_code == 200:
                     return self._parse(response)
+
                 body = self._clean(response.text)
                 kind = self._classify(response.status_code)
+                lowered = body.lower()
+                if response.status_code == 404 or (
+                    response.status_code == 400
+                    and ("model_not_found" in lowered or "does not exist" in lowered)
+                ):
+                    kind = MODEL
                 last_error = ProviderError(
                     self.name,
                     f"HTTP {response.status_code}: {body}",
                     kind=kind,
                     status=response.status_code,
                 )
-                if response.status_code == 400 and "model" in body.lower():
-                    last_error = ProviderError(
-                        self.name,
-                        f"model '{self.model}' rejected: {body}",
-                        kind=MODEL,
-                        status=400,
-                    )
+                if kind == MODEL and not resolved_once:
+                    # The ID was retired or is not on this plan: re-discover once.
+                    resolved_once = True
+                    try:
+                        model = self.resolve_model(refresh=True)
+                    except ProviderError:
+                        raise last_error from None
+                    log.warning("Groq model unavailable; retrying with %s", model)
+                    continue
                 if not last_error.retryable:
                     raise last_error
+
             if attempt < self.max_retries:
                 delay = backoff_delay(attempt)
                 log.warning(
@@ -181,6 +276,7 @@ class GroqProvider(Provider):
                     delay,
                 )
                 time.sleep(delay)
+
         raise last_error or ProviderError(self.name, "unknown failure", kind=OTHER)
 
     def _parse(self, response: requests.Response) -> str:
@@ -211,6 +307,7 @@ class GroqProvider(Provider):
         return {
             "provider": self.name,
             "configured": self.configured(),
-            "model": self.model,
+            "model": self.model or "(auto)",
+            "selection": self._resolved_reason,
             "models_error": self._models_error,
         }

@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any, Iterable
 
-from ..utils import redact
+from ..utils import redact, truncate
 from .base import AUTH, MODEL, Provider, ProviderError, LLMResult
 
 log = logging.getLogger("hermes.providers.router")
@@ -127,7 +127,7 @@ class Router:
             )
 
         summary = " | ".join(
-            str(item.get("message", "failed")) for item in attempts
+            truncate(str(item.get("message", "failed")), 600) for item in attempts
         )
         raise ProviderError(
             "router",

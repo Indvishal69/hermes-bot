@@ -28,6 +28,7 @@ from .base import (
     QUOTA,
     Provider,
     ProviderError,
+    choose_model,
     split_system,
 )
 
@@ -91,32 +92,17 @@ def select_model(
     Returns ``(model, reason)``; ``model`` is ``None`` only when *available*
     is empty and nothing was configured.
     """
-    configured = normalise_model_name(configured)
     names = [normalise_model_name(name) for name in available if normalise_model_name(name)]
-    if not names:
-        if configured:
-            return configured, "model list unavailable; trying the configured model"
-        return None, "no models reported by the API"
-
-    if configured and configured in names:
-        return configured, "configured model is available"
-
-    preferred = next((m for m in PREFERRED_TEXT_MODELS if m in names), None)
-    if preferred:
-        reason = (
-            f"configured model '{configured}' is not available; using {preferred}"
-            if configured
-            else f"auto-selected {preferred}"
-        )
-        return preferred, reason
-
-    remaining = [m for m in names if is_text_model(m)]
-    if remaining:
-        # Prefer "flash" tiers: cheapest reliable option for an agent loop.
-        flash = next((m for m in remaining if "flash" in m.lower()), None)
-        chosen = flash or remaining[0]
-        return chosen, f"auto-selected {chosen} (no preferred model listed)"
-    return None, "the API key exposes no text-generation model"
+    return choose_model(
+        names,
+        normalise_model_name(configured),
+        preferred=PREFERRED_TEXT_MODELS,
+        usable=is_text_model,
+        label="text-generation model",
+        # Prefer a "flash" tier when nothing in the preferred list is listed:
+        # cheapest reliable option for an agent loop.
+        fallback_key=lambda name: (0 if "flash" in name.lower() else 1, name),
+    )
 
 
 class GeminiProvider(Provider):
@@ -278,10 +264,14 @@ class GeminiProvider(Provider):
 
         system, turns = split_system(messages)
         contents = self._build_contents(turns)
+        # Bound every attempt so the retry loop cannot outlive the caller's
+        # AI_TIMEOUT (a 503 "high demand" burst otherwise hangs the whole task).
+        per_attempt = max(10, min(int(timeout), 50))
         config = types.GenerateContentConfig(
             system_instruction=system or None,
             temperature=temperature,
             max_output_tokens=max_tokens,
+            http_options=types.HttpOptions(timeout=per_attempt * 1000),
         )
 
         last_error: ProviderError | None = None
