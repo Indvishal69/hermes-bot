@@ -15,6 +15,7 @@ from ..db import Database
 from ..utils import redact, truncate
 from .base import Connector, ConnectorError, ConnectorTool
 from .github import GitHubConnector
+from .netlify import NetlifyConnector
 from .notion import NotionConnector
 from .platforms import (
     CloudflareConnector,
@@ -30,6 +31,7 @@ CONNECTOR_CLASSES: tuple[type[Connector], ...] = (
     GitHubConnector,
     NotionConnector,
     SlackConnector,
+    NetlifyConnector,
     RenderConnector,
     VercelConnector,
     CloudflareConnector,

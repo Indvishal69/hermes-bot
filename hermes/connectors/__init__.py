@@ -10,6 +10,7 @@ from .base import (
     safe_repo,
 )
 from .github import GitHubConnector
+from .netlify import NetlifyConnector
 from .notion import NotionConnector
 from .platforms import (
     CloudflareConnector,
@@ -31,6 +32,7 @@ __all__ = [
     "GitHubConnector",
     "NotionConnector",
     "SlackConnector",
+    "NetlifyConnector",
     "RenderConnector",
     "VercelConnector",
     "CloudflareConnector",
