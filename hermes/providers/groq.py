@@ -46,6 +46,17 @@ PREFERRED_CHAT_MODELS = (
     "llama-3.1-8b-instant",
 )
 
+# Models that emit chain-of-thought tokens. On Groq those tokens are billed
+# against max_completion_tokens, so a long "thinking" run can leave the visible
+# content empty with finish_reason=stop — the failure seen in production.
+REASONING_MARKERS = ("gpt-oss", "qwen3", "deepseek-r1", "reasoning", "-r1")
+
+
+def is_reasoning_model(name: str) -> bool:
+    model = (name or "").lower()
+    return any(marker in model for marker in REASONING_MARKERS)
+
+
 # Model families that cannot answer a chat completion.
 NON_CHAT_MARKERS = (
     "whisper",
@@ -87,10 +98,13 @@ class GroqProvider(Provider):
         session: requests.Session | None = None,
         max_retries: int = 3,
         model_cache_ttl: int = 3600,
+        reasoning_effort: str = "low",
         secrets: tuple[str, ...] = (),
     ):
         self.api_key = api_key
         self.model = (model or "").strip()
+        self.reasoning_effort = (reasoning_effort or "").strip().lower()
+        self._reasoning_params_supported = True
         self.max_retries = max_retries
         self.model_cache_ttl = model_cache_ttl
         self._session = session or requests.Session()
@@ -183,13 +197,20 @@ class GroqProvider(Provider):
         return chosen
 
     # -- chat ---------------------------------------------------------------
-    def _payload(self, messages: list[dict[str, str]], temperature: float, max_tokens: int) -> dict[str, Any]:
+    def _payload(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        *,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         system, turns = split_system(messages)
         payload_messages: list[dict[str, str]] = []
         if system:
             payload_messages.append({"role": "system", "content": system})
         payload_messages.extend(turns)
-        return {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": payload_messages,
             "temperature": temperature,
@@ -197,6 +218,17 @@ class GroqProvider(Provider):
             # ``max_tokens`` is rejected by some of them.
             "max_completion_tokens": max_tokens,
         }
+        effort = (reasoning_effort or self.reasoning_effort or "").strip().lower()
+        if (
+            self._reasoning_params_supported
+            and effort in ("low", "medium", "high")
+            and is_reasoning_model(self.model)
+        ):
+            # Keep thinking short so the visible JSON answer is not starved, and
+            # hide the raw reasoning so it cannot confuse the action parser.
+            payload["reasoning_effort"] = effort
+            payload["reasoning_format"] = "hidden"
+        return payload
 
     def complete(
         self,
@@ -219,9 +251,13 @@ class GroqProvider(Provider):
         per_attempt = max(10, min(int(timeout), 50))
         resolved_once = False
         last_error: ProviderError | None = None
+        effort: str | None = None
+        token_budget = max_tokens
 
         for attempt in range(1, self.max_retries + 1):
-            payload = self._payload(messages, temperature, max_tokens)
+            payload = self._payload(
+                messages, temperature, token_budget, reasoning_effort=effort
+            )
             payload["model"] = model
             try:
                 response = self._session.post(
@@ -238,11 +274,37 @@ class GroqProvider(Provider):
                 )
             else:
                 if response.status_code == 200:
-                    return self._parse(response)
+                    try:
+                        return self._parse(response)
+                    except ProviderError as exc:
+                        last_error = exc
+                        if not exc.retryable:
+                            raise
+                        # Empty visible content: reasoning probably consumed the
+                        # budget. Give the next attempt more room and less thinking.
+                        token_budget = min(8_000, max(token_budget * 2, token_budget + 1_000))
+                        effort = "low"
+                        if attempt < self.max_retries:
+                            log.warning(
+                                "Groq returned empty content; retrying with "
+                                "max_completion_tokens=%s, reasoning_effort=low",
+                                token_budget,
+                            )
+                            continue
+                        raise
 
                 body = self._clean(response.text)
                 kind = self._classify(response.status_code)
                 lowered = body.lower()
+
+                # Older/newer models may reject the reasoning knobs: drop them
+                # once and retry immediately instead of failing the task.
+                if response.status_code == 400 and self._reasoning_params_supported and (
+                    "reasoning_effort" in lowered or "reasoning_format" in lowered
+                ):
+                    self._reasoning_params_supported = False
+                    log.info("Groq rejected reasoning parameters; retrying without them")
+                    continue
                 if response.status_code == 404 or (
                     response.status_code == 400
                     and ("model_not_found" in lowered or "does not exist" in lowered)
@@ -292,14 +354,25 @@ class GroqProvider(Provider):
             ) from exc
         if not isinstance(content, str) or not content.strip():
             finish = ""
+            had_reasoning = False
             try:
-                finish = data["choices"][0].get("finish_reason") or ""
+                message = data["choices"][0]
+                finish = message.get("finish_reason") or ""
+                had_reasoning = bool((message.get("message") or {}).get("reasoning"))
             except (KeyError, IndexError, TypeError):
                 pass
+            detail = f"empty content (finish_reason={finish or 'unknown'})"
+            if had_reasoning:
+                detail += (
+                    " — the model spent its output budget on reasoning tokens; "
+                    "raise MAX_COMPLETION_TOKENS or set GROQ_MODEL to a "
+                    "non-reasoning chat model"
+                )
             raise ProviderError(
                 self.name,
-                f"empty message (finish_reason={finish or 'unknown'})",
+                detail,
                 kind=OTHER,
+                retryable=True,
             )
         return content.strip()
 
@@ -309,5 +382,6 @@ class GroqProvider(Provider):
             "configured": self.configured(),
             "model": self.model or "(auto)",
             "selection": self._resolved_reason,
+            "reasoning_effort": self.reasoning_effort or "(default)",
             "models_error": self._models_error,
         }
