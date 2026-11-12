@@ -366,17 +366,26 @@ class HermesBot(discord.Client):
                 lines.append(f"⚪ {name}: not configured")
                 continue
             try:
+                # Each attempt inside the provider is capped at 30s, so three
+                # retries plus backoff fit inside this wait.
                 text = await asyncio.wait_for(
                     asyncio.to_thread(
-                        provider.complete, probe, temperature=0.0, max_tokens=32, timeout=60
+                        provider.complete, probe, temperature=0.0, max_tokens=32, timeout=30
                     ),
-                    timeout=75,
+                    timeout=120,
                 )
                 lines.append(f"✅ {name} (`{provider.current_model()}`): {truncate(text, 80)}")
             except ProviderError as exc:
                 lines.append(f"❌ {name}: {truncate(exc.detail, 700)}")
             except asyncio.TimeoutError:
-                lines.append(f"❌ {name}: timed out after 75s")
+                last = ""
+                for row in self.router.status():
+                    if row["provider"] == name and row.get("last_error"):
+                        last = truncate(row["last_error"].get("message", ""), 300)
+                lines.append(
+                    f"❌ {name}: still retrying after 120s (provider is slow or rate limited)"
+                    + (f" — last error: {last}" if last else "")
+                )
             except Exception as exc:  # noqa: BLE001
                 lines.append(f"❌ {name}: {type(exc).__name__}: {self._clean(exc)}")
         await status.edit(content=truncate(self._clean("\n".join(lines)), 1_900))

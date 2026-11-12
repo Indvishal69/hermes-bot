@@ -170,6 +170,19 @@ class AgentLoop:
     def _clean(self, text: Any) -> str:
         return redact(truncate(text, 1_600), self.settings.secrets)
 
+    def _provider_errors(self) -> str:
+        """Short "provider: last error" summary for failed/timed-out calls."""
+        try:
+            rows = self.router.status()
+        except Exception:  # noqa: BLE001 - diagnostics must never raise
+            return ""
+        parts = []
+        for row in rows:
+            error = row.get("last_error") or {}
+            if error.get("message"):
+                parts.append(f"{row.get('provider')}: {truncate(error['message'], 300)}")
+        return " | ".join(parts)
+
     # -- public API ---------------------------------------------------------
     async def handle(
         self,
@@ -284,6 +297,9 @@ class AgentLoop:
                 )
             except asyncio.TimeoutError:
                 text = f"AI call timed out after {self.settings.ai_timeout}s."
+                detail = self._provider_errors()
+                if detail:
+                    text += f"\nLast provider errors: {detail}"
                 return AgentRun(text=text, status="failed", steps=step, task_id=task_id, error=text)
             except ProviderError as exc:
                 text = f"AI providers failed: {self._clean(exc)}"

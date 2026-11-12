@@ -73,7 +73,7 @@ class Settings:
     groq_api_key: str = ""
     gemini_api_key: str = ""
     active_provider: str = "groq"
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     gemini_model: str = ""  # empty => auto-discover a working text model
     gemini_api_base: str = ""
     # --- agent behaviour ---------------------------------------------------
@@ -212,7 +212,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         groq_api_key=groq_key,
         gemini_api_key=gemini_key,
         active_provider=active,
-        groq_model=_get(env, "GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_model=_get(env, "GROQ_MODEL", "openai/gpt-oss-120b"),
         gemini_model=_get(env, "GEMINI_MODEL"),
         gemini_api_base=_get(env, "GEMINI_API_BASE"),
         max_agent_steps=_get_int(env, "MAX_AGENT_STEPS", 8, problems, 1, 25),
