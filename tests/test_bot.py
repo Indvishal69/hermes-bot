@@ -285,3 +285,48 @@ def test_deny_resumes_the_loop_without_running_anything(settings):
     loop, channel = asyncio.run(scenario())
     assert loop.resumes and loop.resumes[0]["approved"] is False
     assert any("Denied" in text for text in channel.sent)
+
+
+class ProviderWithModel:
+    """Minimal provider stub for startup model resolution."""
+
+    def __init__(self, name="groq", *, chosen="openai/gpt-oss-120b", error=None):
+        self.name = name
+        self.model = chosen
+        self.error = error
+        self.resolved = 0
+
+    def configured(self):
+        return True
+
+    def current_model(self):
+        return self.model
+
+    def resolve_model(self, refresh=False):
+        self.resolved += 1
+        if self.error:
+            raise self.error
+        return self.model
+
+    def selection_reason(self):
+        return "configured model is available"
+
+    def status(self):
+        return {"provider": self.name, "configured": True, "model": self.model}
+
+
+def test_startup_resolves_provider_models(settings):
+    from hermes.providers.base import ProviderError
+
+    async def scenario():
+        bot = make_bot(settings)
+        good = ProviderWithModel()
+        bad = ProviderWithModel("gemini", error=ProviderError("gemini", "404 NOT_FOUND", kind="model"))
+        bot.router.providers = {"groq": good, "gemini": bad}
+        bot.router.order = ["groq", "gemini"]
+        await bot._resolve_models()
+        return good, bad
+
+    good, bad = asyncio.run(scenario())
+    assert good.resolved == 1
+    assert bad.resolved == 1  # a failing provider must not stop startup

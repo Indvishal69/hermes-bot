@@ -124,12 +124,35 @@ class HermesBot(discord.Client):
         log.info("%s %s online as %s", APP_NAME, __version__, self.user)
         log.info("Workspace: %s", self.workspace.root)
         log.info("Providers: %s", ", ".join(self.router.available()) or "none")
+        await self._resolve_models()
         try:
             await self.change_presence(
                 activity=discord.Activity(type=discord.ActivityType.watching, name="the workspace")
             )
         except discord.HTTPException:
             pass
+
+    async def _resolve_models(self) -> None:
+        """Check each provider's model ID at startup so ``!health`` is accurate.
+
+        A retired ID (Groq retires models on a schedule) would otherwise only be
+        discovered on the first failed request.
+        """
+        for name in list(self.router.order):
+            provider = self.router.providers.get(name)
+            if provider is None or not provider.configured():
+                continue
+            resolver = getattr(provider, "resolve_model", None)
+            if resolver is None:
+                continue
+            try:
+                chosen = await asyncio.to_thread(resolver)
+                reason = getattr(provider, "selection_reason", lambda: "")()
+                log.info("%s model resolved: %s (%s)", name, chosen, reason or "ok")
+            except ProviderError as exc:
+                log.warning("%s model resolution failed: %s", name, exc.detail)
+            except Exception as exc:  # noqa: BLE001 - startup must never crash
+                log.warning("%s model resolution error: %s: %s", name, type(exc).__name__, exc)
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot:
