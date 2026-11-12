@@ -37,6 +37,7 @@ def build_router(settings, *, session=None) -> Router:
             settings.gemini_model,
             api_base=settings.gemini_api_base,
             model_cache_ttl=settings.model_cache_ttl,
+            reasoning_effort=settings.groq_reasoning_effort,
             secrets=settings.secrets,
         )
     order = [settings.active_provider] + [name for name in ("groq", "gemini")]
@@ -44,5 +45,6 @@ def build_router(settings, *, session=None) -> Router:
         providers,
         order,
         cooldown=settings.provider_cooldown,
+        quota_cooldown=settings.quota_cooldown,
         secrets=settings.secrets,
     )

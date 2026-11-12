@@ -74,6 +74,7 @@ class Settings:
     gemini_api_key: str = ""
     active_provider: str = "groq"
     groq_model: str = "openai/gpt-oss-120b"
+    groq_reasoning_effort: str = "low"
     gemini_model: str = ""  # empty => auto-discover a working text model
     gemini_api_base: str = ""
     # --- agent behaviour ---------------------------------------------------
@@ -105,6 +106,7 @@ class Settings:
     port: int = 10_000
     log_level: str = "INFO"
     provider_cooldown: int = 60
+    quota_cooldown: int = 3_600
     model_cache_ttl: int = 3_600
     task_rate_limit: int = 3
     # --- integrations ------------------------------------------------------
@@ -164,6 +166,8 @@ class Settings:
             "web_enabled": self.web_enabled,
             "browser_enabled": self.browser_enabled,
             "search_provider": self.search_provider or "(none)",
+            "groq_reasoning_effort": self.groq_reasoning_effort or "(default)",
+            "quota_cooldown": self.quota_cooldown,
         }
 
 
@@ -221,6 +225,14 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         except ValueError:
             problems.append("TEMPERATURE must be a number; using 0.2.")
 
+    groq_effort = _get(env, "GROQ_REASONING_EFFORT", "low").lower()
+    if groq_effort not in ("", "low", "medium", "high"):
+        problems.append(
+            "GROQ_REASONING_EFFORT must be low, medium or high "
+            f"(got {groq_effort!r}); using 'low'."
+        )
+        groq_effort = "low"
+
     search_provider = _get(env, "SEARCH_PROVIDER").lower()
     if search_provider not in ("", "tavily", "brave", "searxng"):
         problems.append(
@@ -242,6 +254,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         gemini_api_key=gemini_key,
         active_provider=active,
         groq_model=_get(env, "GROQ_MODEL", "openai/gpt-oss-120b"),
+        groq_reasoning_effort=groq_effort,
         gemini_model=_get(env, "GEMINI_MODEL"),
         gemini_api_base=_get(env, "GEMINI_API_BASE"),
         max_agent_steps=_get_int(env, "MAX_AGENT_STEPS", 8, problems, 1, 25),
@@ -273,6 +286,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         port=_get_int(env, "PORT", 10_000, problems, 1, 65_535),
         log_level=_get(env, "LOG_LEVEL", "INFO").upper() or "INFO",
         provider_cooldown=_get_int(env, "PROVIDER_COOLDOWN", 60, problems, 0, 3_600),
+        quota_cooldown=_get_int(env, "QUOTA_COOLDOWN", 3_600, problems, 0, 86_400),
         model_cache_ttl=_get_int(env, "MODEL_CACHE_TTL", 3_600, problems, 0, 86_400),
         task_rate_limit=_get_int(env, "TASK_RATE_LIMIT", 3, problems, 0, 600),
         github_token=_get(env, "GITHUB_TOKEN"),

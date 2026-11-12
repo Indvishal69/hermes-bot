@@ -7,9 +7,14 @@ import time
 from typing import Any, Iterable
 
 from ..utils import redact, truncate
-from .base import AUTH, MODEL, Provider, ProviderError, LLMResult
+from .base import AUTH, MODEL, QUOTA, Provider, ProviderError, LLMResult
 
 log = logging.getLogger("hermes.providers.router")
+
+# A per-day quota does not recover in 60 seconds: retrying it on every message
+# only wastes time, so these failures get a long quarantine.
+DAILY_QUOTA_HINTS = ("per day", "daily", "requests per day", "perday", "quotaid",
+                     "generate_content_free_tier_requests", "rpd")
 
 
 class Router:
@@ -26,6 +31,7 @@ class Router:
         order: Iterable[str],
         *,
         cooldown: int = 60,
+        quota_cooldown: int = 3_600,
         secrets: tuple[str, ...] = (),
     ):
         self.providers = dict(providers)
@@ -37,6 +43,7 @@ class Router:
             if name not in self.order:
                 self.order.append(name)
         self.cooldown = cooldown
+        self.quota_cooldown = quota_cooldown
         self.secrets = secrets
         self._blocked_until: dict[str, float] = {}
         self._last_error: dict[str, dict[str, Any]] = {}
@@ -54,6 +61,12 @@ class Router:
         seconds = self.cooldown if exc.retryable else max(self.cooldown, 300)
         if exc.kind in (AUTH, MODEL):
             seconds = max(seconds, 300)
+
+        detail = str(exc).lower()
+        daily_quota = exc.kind == QUOTA and any(hint in detail for hint in DAILY_QUOTA_HINTS)
+        if daily_quota:
+            seconds = max(seconds, self.quota_cooldown)
+
         if seconds:
             self._blocked_until[name] = time.time() + seconds
         self._last_error[name] = {
@@ -61,8 +74,16 @@ class Router:
             "status": exc.status,
             "message": redact(str(exc), self.secrets),
             "at": time.time(),
+            "daily_quota": daily_quota,
+            "cooldown_seconds": int(seconds),
         }
-        log.warning("Provider %s failed: %s", name, exc.detail)
+        if daily_quota:
+            log.warning(
+                "Provider %s hit a daily quota; deprioritised for %ss: %s",
+                name, int(seconds), exc.detail,
+            )
+        else:
+            log.warning("Provider %s failed: %s", name, exc.detail)
 
     def _record_success(self, name: str) -> None:
         self._blocked_until.pop(name, None)
