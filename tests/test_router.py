@@ -140,3 +140,36 @@ def test_secrets_are_redacted_in_recorded_errors():
     with pytest.raises(ProviderError):
         router.complete([{"role": "user", "content": "hi"}])
     assert secret not in str(router.status()[0]["last_error"]["message"])
+
+
+def test_daily_quota_gets_a_long_cooldown():
+    quota_error = ProviderError(
+        "gemini",
+        "ClientError: 429 RESOURCE_EXHAUSTED. Quota exceeded for metric: "
+        "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+        "limit: 20, model: gemini-3.8-flash ... limit exceeded on Free Tier",
+        kind="quota",
+        status=429,
+    )
+    groq = FakeProvider("groq", outcomes=["from groq"])
+    gemini = FakeProvider("gemini", outcomes=[quota_error, "from gemini"])
+    router = Router({"groq": groq, "gemini": gemini}, ["gemini", "groq"],
+                    cooldown=60, quota_cooldown=3_600)
+
+    result = router.complete([{"role": "user", "content": "hi"}])
+    assert result.provider == "groq"          # fell back immediately
+
+    status = {row["provider"]: row for row in router.status()}
+    assert status["gemini"]["cooldown_seconds"] > 3_000
+    assert status["gemini"]["last_error"]["daily_quota"] is True
+
+
+def test_per_minute_rate_limit_keeps_the_short_cooldown():
+    burst = ProviderError("gemini", "429 RESOURCE_EXHAUSTED: rate limit per minute",
+                          kind="quota", status=429)
+    router = Router({"gemini": FakeProvider("gemini", outcomes=[burst, "ok"])},
+                    ["gemini"], cooldown=60, quota_cooldown=3_600)
+    with pytest.raises(ProviderError):
+        router.complete([{"role": "user", "content": "hi"}])
+    assert router.status()[0]["cooldown_seconds"] <= 60
+    assert router.status()[0]["last_error"]["daily_quota"] is False

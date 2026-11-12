@@ -147,6 +147,7 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | --- | --- | --- |
 | `ACTIVE_PROVIDER` | `groq` | `groq` or `gemini`; the other is the fallback |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Any Groq chat model; if the ID is retired or not on your plan, a working chat model is selected automatically |
+| `GROQ_REASONING_EFFORT` | `low` | Reasoning models (gpt-oss/qwen3) only: keeps thinking short so the answer is not starved |
 | `GEMINI_MODEL` | *(empty)* | Empty = auto-discover a text model for the key |
 | `GEMINI_API_BASE` | *(empty)* | Only for a compatible proxy/endpoint |
 | `MAX_AGENT_STEPS` | `8` | Tool steps per task (1–25) |
@@ -155,6 +156,7 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `TEMPERATURE` | `0.2` | 0–2 |
 | `MAX_COMPLETION_TOKENS` | `3000` | Per response |
 | `PROVIDER_COOLDOWN` | `60` | Seconds a failing provider is deprioritised |
+| `QUOTA_COOLDOWN` | `3600` | Seconds a provider is deprioritised after a **daily** quota error |
 | `TASK_RATE_LIMIT` | `3` | Minimum seconds between tasks |
 | `DATA_DIR` | `./data` | SQLite, backups, workspace |
 | `WORKSPACE_DIR` | `$DATA_DIR/workspace` | The only directory the agent may touch |
@@ -206,7 +208,7 @@ hermes/
   connectors/                pluggable services: base, registry, github, notion,
                              slack, platforms (render/vercel/cloudflare/hf)
   browsing/                  web fetch + SSRF guard, search, optional browser
-tests/                       280 pytest tests (no network, no credentials needed)
+tests/                       286 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 

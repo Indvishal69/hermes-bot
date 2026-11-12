@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-280 passed in 13.72s
+286 passed in 13.80s
 ```
 
 Coverage by area (all passing):
@@ -41,10 +41,10 @@ Coverage by area (all passing):
 | `tests/test_db.py` (11) | migrations idempotent; v1→v2 upgrade keeps data; per-user trimming; history limit/clear; notes; task lifecycle; audit ok/failed; kv expiry; online backup + restore roundtrip; restore refuses a foreign file; stats |
 | `tests/test_files.py` (20) | write/read; Created vs Updated; `../`, absolute, nested-escape and NUL paths rejected; symlink escape rejected; size limit; `.git` writes refused; line windows; replace; delete rules; list/tree; search by glob; zip contents; workspace info |
 | `tests/test_shell.py` (42) | 11 legitimate commands allowed (incl. `pip install python-dotenv` — a 2.0 false positive); 20 dangerous commands rejected (`rm -rf /`, `sudo`, `curl`, `bash -c`, `&&`, pipes, `>`, `os.environ`, `.env`, `git push`, `git reset --hard`, absolute paths, …); `git push` only with `ALLOW_GIT_PUSH`; force-push always blocked; real execution with exit codes; timeout kills the process; rejected command never runs; **child process cannot see `DISCORD_TOKEN`/`GROQ_API_KEY`**; syntax checker; process registry |
-| `tests/test_router.py` (11) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
+| `tests/test_router.py` (13) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
 | `tests/test_gemini.py` (26) | name normalisation; text-model filtering (tts/live/image/embedding/transcribe/computer-use excluded, `supportedActions` respected); configured-model preference; fallback to preferred; auto-selection; flash preference; empty-list behaviour; **roles preserved** (`user/model/user`), consecutive turns merged, `system_instruction` passed; retired model triggers re-discovery + retry; auth error not retried; quota classified retryable; `finish_reason=SAFETY` reported as blocked; listing error surfaced |
 | `tests/test_loop.py` (19) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
-| `tests/test_groq.py` (26) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
+| `tests/test_groq.py` (30) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
 | `tests/test_browsing.py` (37) | SSRF guard: non-HTTP schemes, embedded credentials, odd ports, `localhost`/`*.internal`, IP literals (loopback, RFC1918, `169.254.169.254`, `::1`), hostnames resolving to private IPs, redirect hops re-validated, redirect limit, domain allowlist; extraction (script/style stripped, title, absolute links); fetch limits (2 MB cap, non-text refusal, HTTP errors); search providers (tavily/brave/searxng parsing, 401 hint, unconfigured message); tool gating (disabled → no tools, search/browser only when usable); `browser_open` without Playwright explains the install |
 | `tests/test_connectors.py` (46) | input validation (`safe_id`/`safe_path`/`safe_repo` reject traversal, spaces, hosts); HttpClient refuses absolute URLs and adds hints on 401/404; registry: active-by-default, missing env, disable/enable persistence across a restart, settings validation and persistence, tool-spec approval flags, secret redaction in errors; real connectors against fake HTTP (GitHub repo/file/issue, Notion page-URL parsing and paragraph blocks, Slack `ok:false`, Cloudflare purge body, Render deploy URL) |
 | `tests/test_bot.py` (21) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
@@ -276,3 +276,39 @@ from both the prompt and the tool specs.
 installed here, and they would not fit a 512 MB instance anyway; `browser_open` is tested
 only for its "not installed" message. If you enable it on a ≥1 GB host, `!web <url>` and a
 task like "open this JS page and summarise it" are the two checks worth running.
+
+## 12. Third production finding: Groq empty content and Gemini daily quota (3.2.2)
+
+Your screenshot showed:
+
+```
+AI providers failed: router: All providers failed.
+gemini: ClientError: 429 RESOURCE_EXHAUSTED … limit: 20, model: gemini-3.8-flash,
+        generate_content_free_tier_requests …
+| groq: empty message (finish_reason=stop)
+```
+
+Two independent causes:
+
+1. **Gemini free tier is 20 requests/day** on `gemini-3.8-flash` (per project, reset
+   midnight Pacific). One agent task uses 3–8 calls, so two or three messages exhaust it.
+2. **Groq returned 200 with empty `content`.** For reasoning models (`gpt-oss`, `qwen3`)
+   the thinking tokens are billed against `max_completion_tokens`; a long reasoning run
+   leaves the visible answer empty with `finish_reason=stop`.
+
+Fixes, and what each test asserts:
+
+| Fix | Test |
+| --- | --- |
+| `reasoning_effort=low` + `reasoning_format=hidden` sent for reasoning models | `test_reasoning_parameters_are_sent_for_gpt_oss_models` |
+| Those params omitted for plain models | `test_reasoning_parameters_are_omitted_for_plain_models` |
+| A `400` naming those params drops them and retries | `test_rejected_reasoning_parameters_are_dropped_and_retried` |
+| Empty content retried with a doubled budget and `effort=low` | `test_empty_content_is_retried_with_a_bigger_budget` |
+| Still empty → error names the reasoning budget and `MAX_COMPLETION_TOKENS` | `test_empty_content_every_time_explains_the_reasoning_budget` |
+| Daily quota → 3600s quarantine, not 60s | `test_daily_quota_gets_a_long_cooldown` |
+| Per-minute 429 keeps the short cooldown | `test_per_minute_rate_limit_keeps_the_short_cooldown` |
+
+**Not verified against the live APIs:** these were written from the error text and Groq's
+documented parameters. Without your keys I cannot reproduce a real `gpt-oss` reasoning
+response, so `!testai` after deploying is the check that matters — it prints the actual
+provider error if anything is still off.

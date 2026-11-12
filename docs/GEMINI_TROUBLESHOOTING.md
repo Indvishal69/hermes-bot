@@ -46,14 +46,37 @@ Five separate problems, all visible in the old `agent.py`:
 
 `!testai` output maps directly onto the table below.
 
+## Free-tier limits (November 2026)
+
+Read from Google AI Studio for a free project; limits are **per project**, not per API
+key, and requests-per-day resets at midnight Pacific:
+
+| Model | RPM | Input TPM | RPD |
+| --- | --- | --- | --- |
+| `gemini-3.8-flash` | 5 | 250,000 | **20** |
+| `gemini-3.6-flash` | 5 | 250,000 | **20** |
+| `gemini-3.5-flash-lite` | 10–15 | 250,000 | **500** |
+| `gemini-3.1-flash-lite` | 10–15 | 250,000 | **500** |
+
+20 requests a day is not enough for an agent: one task uses 3–8 model calls. On a free
+key, either pin `GEMINI_MODEL=gemini-3.5-flash-lite` (500/day, lower quality but usable),
+or keep Groq as `ACTIVE_PROVIDER` and treat Gemini as the fallback. Enable billing on the
+project if you want `gemini-3.8-flash` at volume.
+
+When the daily limit is hit, Hermes now quarantines Gemini for `QUOTA_COOLDOWN`
+(default 3600s) instead of 60s, so it stops re-trying a quota that cannot recover until
+the next reset. `!health` shows `cooling down …s` and the last error.
+
 ## Error → cause → fix
+
 
 | What you see | Real cause | Fix |
 | --- | --- | --- |
 | `[auth HTTP 401] API key not valid` | Key wrong, revoked, or from another project | Regenerate in Google AI Studio, update `GEMINI_API_KEY` on the host, redeploy |
 | `[auth HTTP 403] PERMISSION_DENIED: Generative Language API has not been used in project ... or it is disabled` | Gemini API not enabled for the project | Enable "Generative Language API" in Google Cloud console for that project, wait 1–2 min |
 | `[model HTTP 404] model gemini-x is not found for API version v1beta` | Model ID retired or not available to your key | Leave `GEMINI_MODEL` empty (auto-discovery), or run `!models` and pin one from the list |
-| `[quota HTTP 429] RESOURCE_EXHAUSTED` | Free-tier rate limit / daily quota | Wait, or rely on the Groq fallback; check quota in AI Studio |
+| `[quota HTTP 429] RESOURCE_EXHAUSTED … limit: 20, generate_content_free_tier_requests` | **Daily** free-tier cap (20/day on 3.8-flash) | Switch to `gemini-3.5-flash-lite` (500/day), enable billing, or let Groq carry the load |
+| `[quota HTTP 429]` without `per day` | Per-minute burst limit | Retried with backoff; falls back to Groq if it persists |
 | `no usable text model (no models reported by the API)` | Key cannot list models (bad key, disabled API, region) | Fix key/API first; `!models` shows the underlying listing error |
 | `no text returned — finish_reason=SAFETY` | Prompt/response blocked by safety filters | Rephrase; this is a content policy result, not a bug |
 | `no text returned — finish_reason=MAX_TOKENS` | `MAX_COMPLETION_TOKENS` too small for the reply | Raise `MAX_COMPLETION_TOKENS` (e.g. 4000) |

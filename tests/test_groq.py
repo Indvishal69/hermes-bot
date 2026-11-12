@@ -199,14 +199,56 @@ def test_payload_separates_system_and_uses_completion_tokens():
     assert "max_tokens" not in payload
 
 
-def test_empty_message_is_reported_with_finish_reason():
+def test_empty_content_is_retried_with_a_bigger_budget():
+    """Groq can return 200 with empty content when reasoning eats the budget."""
     session = FakeSession(
-        posts=[(200, {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]})]
+        posts=[(200, {"choices": [{"message": {"content": ""}, "finish_reason": "stop"}]})]
     )
+    provider = make_provider(session)
+    assert provider.complete([{"role": "user", "content": "hi"}], max_tokens=3000) == "ok"
+    assert len(session.post_calls) == 2
+    assert session.post_calls[1]["max_completion_tokens"] > 3000
+    assert session.post_calls[1].get("reasoning_effort") == "low"
+
+
+def test_empty_content_every_time_explains_the_reasoning_budget():
+    empty = (200, {"choices": [{"message": {"content": "", "reasoning": "thinking..."},
+                               "finish_reason": "stop"}]})
+    session = FakeSession(posts=[empty, empty, empty])
     provider = make_provider(session)
     with pytest.raises(ProviderError) as excinfo:
         provider.complete([{"role": "user", "content": "hi"}])
-    assert "length" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "finish_reason=stop" in message
+    assert "reasoning tokens" in message
+    assert "MAX_COMPLETION_TOKENS" in message
+
+
+def test_reasoning_parameters_are_sent_for_gpt_oss_models():
+    session = FakeSession()
+    provider = make_provider(session, model="openai/gpt-oss-120b")
+    provider.complete([{"role": "user", "content": "hi"}])
+    payload = session.post_calls[0]
+    assert payload["reasoning_effort"] == "low"
+    assert payload["reasoning_format"] == "hidden"
+
+
+def test_reasoning_parameters_are_omitted_for_plain_models():
+    session = FakeSession()
+    provider = make_provider(session, model="llama-3.1-8b-instant")
+    provider.complete([{"role": "user", "content": "hi"}])
+    assert "reasoning_effort" not in session.post_calls[0]
+
+
+def test_rejected_reasoning_parameters_are_dropped_and_retried():
+    session = FakeSession(posts=[
+        (400, {"error": {"message": "Unrecognized request argument supplied: reasoning_format"}}),
+        (200, {"choices": [{"message": {"content": "recovered"}}]}),
+    ])
+    provider = make_provider(session, model="openai/gpt-oss-120b")
+    assert provider.complete([{"role": "user", "content": "hi"}]) == "recovered"
+    assert "reasoning_format" in session.post_calls[0]
+    assert "reasoning_format" not in session.post_calls[1]
 
 
 def test_model_listing_failure_is_surfaced_and_configured_model_is_used():

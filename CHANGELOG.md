@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.2.2 — 12 November 2026
+
+**Fixed: "empty message (finish_reason=stop)" from Groq, and daily-quota thrash on Gemini.**
+
+Groq returned HTTP 200 with empty `content` for `openai/gpt-oss-120b`: reasoning
+tokens are billed against `max_completion_tokens`, so a long thinking run left the
+visible answer empty.
+
+* Reasoning models (`gpt-oss`, `qwen3`, `deepseek-r1`) now get
+  `reasoning_effort=low` and `reasoning_format=hidden`, so thinking cannot starve the
+  JSON answer. Configurable with `GROQ_REASONING_EFFORT`.
+* If a model rejects those parameters (HTTP 400 naming them), Hermes drops them once
+  and retries instead of failing the task.
+* Empty content is retried with a doubled token budget and `reasoning_effort=low`; if
+  it stays empty, the error now says the model spent its budget on reasoning and
+  points at `MAX_COMPLETION_TOKENS`.
+* Gemini's free tier allows **20 requests/day** on `gemini-3.8-flash` (per project,
+  reset midnight Pacific), while `gemini-3.5-flash-lite` allows 500. A daily-quota
+  `429` now quarantines that provider for `QUOTA_COOLDOWN` (default 3600s) instead of
+  60s, so Hermes stops retrying a quota that cannot recover for hours.
+* `!health` shows the cooldown and whether the last error was a daily quota.
+* Tests: 4 Groq cases and 2 router cases added (286 total).
+
 ## 3.2.1 — 12 November 2026
 
 **New connector: Netlify** (`NETLIFY_TOKEN`).

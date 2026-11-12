@@ -49,7 +49,7 @@ installed but unused by the ZIP's code.
 * SQLite migrations (v1 → v2) with an online backup/restore API.
 * Provider router with per-provider cooldown, `!model` switch, `!models` discovery.
 * Secret redaction across logs, tool results, Discord output and provider errors.
-* 280 pytest tests: workspace escapes, symlink escapes, command matrix, fallback,
+* 286 pytest tests: workspace escapes, symlink escapes, command matrix, fallback,
   Gemini model selection, blocked responses, approval flow, health endpoint, and a
   local HTTP mock that exercises the real `google-genai` SDK and the Groq request
   path end to end.
