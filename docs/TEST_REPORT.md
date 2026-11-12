@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-143 passed in 19.76s
+154 passed in 24.21s
 ```
 
 Coverage by area (all passing):
@@ -44,6 +44,7 @@ Coverage by area (all passing):
 | `tests/test_router.py` (11) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
 | `tests/test_gemini.py` (26) | name normalisation; text-model filtering (tts/live/image/embedding/transcribe/computer-use excluded, `supportedActions` respected); configured-model preference; fallback to preferred; auto-selection; flash preference; empty-list behaviour; **roles preserved** (`user/model/user`), consecutive turns merged, `system_instruction` passed; retired model triggers re-discovery + retry; auth error not retried; quota classified retryable; `finish_reason=SAFETY` reported as blocked; listing error surfaced |
 | `tests/test_loop.py` (12) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
+| `tests/test_bot.py` (11) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running |
 | `tests/test_web_and_utils.py` (10) | `/health` 200 + payload; **no paths or secrets in the response**; unhealthy database → 503; `/ready` and `/`; redaction of key shapes; JSON extraction (plain, fenced, embedded, malformed); backoff growth and cap; truncate/chunk; human helpers |
 
 ## 3. Preflight (`python agent.py --check`)
@@ -129,3 +130,32 @@ pip install -r requirements.txt pytest
 python -m pytest
 python agent.py --check
 ```
+
+## 8. Regression found in production, then fixed (3.0.1)
+
+Your screenshot from the live deployment showed every message ending in:
+
+```
+❌ Internal error: AttributeError: '_UnixSelectorEventLoop' object has no attribute 'handle'
+```
+
+Root cause: `discord.Client` owns a `loop` attribute, and
+`Client._async_setup_hook()` (run inside `bot.run()`) replaces it with the running
+asyncio loop. The 3.0.0 bot stored the `AgentLoop` as `self.loop`, so
+`self.loop.handle(...)` became `event_loop.handle(...)`.
+
+Fix: the attribute is `self.agent_loop` everywhere in `hermes/bot.py`, with a comment
+explaining why, plus 11 tests in `tests/test_bot.py`. The regression test reproduces
+the production condition (`bot.loop = asyncio.get_running_loop()`), and I verified it
+fails against the old code with the same message:
+
+```
+E   AttributeError: '_UnixSelectorEventLoop' object has no attribute 'handle'
+hermes/bot.py:459: AttributeError
+FAILED tests/test_bot.py::test_agent_loop_does_not_shadow_discord_client_attributes
+FAILED tests/test_bot.py::test_task_survives_discord_overwriting_client_loop
+```
+
+and passes after the rename. One test also scans `discord.Client.__init__` and
+`_async_setup_hook` for assigned attribute names and fails if the bot ever shadows
+one of them again.

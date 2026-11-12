@@ -172,10 +172,10 @@ hermes/
     shell.py                 command guard + subprocess runner
     registry.py              tool schema and dispatcher
   core/loop.py               plan → act → observe, approvals
-  bot.py                     Discord commands and status messages
+  bot.py                     Discord commands and status messages (agent loop is `agent_loop`)
   web.py                     Flask health endpoints
   integrations/              GitHub, Render, Vercel, Cloudflare, Hugging Face
-tests/                       143 pytest tests (no network, no credentials needed)
+tests/                       154 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
