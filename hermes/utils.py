@@ -51,6 +51,47 @@ def backoff_delay(attempt: int, base: float = 1.5, cap: float = 20.0, jitter: fl
     return round(min(cap, delay), 3)
 
 
+_RETRY_PATTERNS = (
+    re.compile(r"try again in (\d+(?:\.\d+)?)\s*s", re.I),
+    re.compile(r"retry (?:again )?in (\d+(?:\.\d+)?)\s*s", re.I),
+    re.compile(r"retryDelay\"?\s*[:=]\s*\"?(\d+(?:\.\d+)?)s", re.I),
+    re.compile(r"(\d+(?:\.\d+)?)\s*seconds?\b", re.I),
+)
+
+
+def parse_retry_after(text: Any = None, headers: Mapping[str, Any] | None = None) -> float | None:
+    """Extract a server's "wait N seconds" hint.
+
+    Providers say this in different places — a ``Retry-After`` header, a
+    ``retryDelay`` field, or prose like "Please try again in 9.1425s". Honouring
+    it is the difference between a task that recovers and one that fails.
+    """
+    if headers:
+        for key in ("Retry-After", "retry-after", "X-RateLimit-Reset-Requests"):
+            raw = headers.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(str(raw).strip().rstrip("s"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value <= 86_400:
+                return value
+    if not text:
+        return None
+    haystack = str(text)[:4_000]
+    for pattern in _RETRY_PATTERNS:
+        match = pattern.search(haystack)
+        if match:
+            try:
+                value = float(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value <= 86_400:
+                return round(value, 2)
+    return None
+
+
 def extract_json_object(raw: str) -> dict[str, Any]:
     """Parse the single JSON object a model was asked to return.
 

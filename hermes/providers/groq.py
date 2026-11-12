@@ -19,7 +19,7 @@ from typing import Any, Iterable
 
 import requests
 
-from ..utils import backoff_delay, redact, truncate
+from ..utils import backoff_delay, parse_retry_after, redact, truncate
 from .base import (
     AUTH,
     MODEL,
@@ -315,6 +315,7 @@ class GroqProvider(Provider):
                     f"HTTP {response.status_code}: {body}",
                     kind=kind,
                     status=response.status_code,
+                    retry_after=parse_retry_after(body, response.headers),
                 )
                 if kind == MODEL and not resolved_once:
                     # The ID was retired or is not on this plan: re-discover once.

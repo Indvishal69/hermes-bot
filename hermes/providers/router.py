@@ -7,7 +7,7 @@ import time
 from typing import Any, Iterable
 
 from ..utils import redact, truncate
-from .base import AUTH, MODEL, QUOTA, Provider, ProviderError, LLMResult
+from .base import AUTH, MODEL, QUOTA, RETRYABLE_KINDS, Provider, ProviderError, LLMResult
 
 log = logging.getLogger("hermes.providers.router")
 
@@ -32,6 +32,7 @@ class Router:
         *,
         cooldown: int = 60,
         quota_cooldown: int = 3_600,
+        wait_cap: int = 20,
         secrets: tuple[str, ...] = (),
     ):
         self.providers = dict(providers)
@@ -44,6 +45,9 @@ class Router:
                 self.order.append(name)
         self.cooldown = cooldown
         self.quota_cooldown = quota_cooldown
+        # If a provider says "retry in Ns" and N is this small, it is faster to
+        # wait than to fail the task.
+        self.wait_cap = max(0, wait_cap)
         self.secrets = secrets
         self._blocked_until: dict[str, float] = {}
         self._last_error: dict[str, dict[str, Any]] = {}
@@ -66,6 +70,9 @@ class Router:
         daily_quota = exc.kind == QUOTA and any(hint in detail for hint in DAILY_QUOTA_HINTS)
         if daily_quota:
             seconds = max(seconds, self.quota_cooldown)
+        elif exc.retry_after is not None and exc.kind in RETRYABLE_KINDS:
+            # A per-minute limit recovers on its own; match the server's hint.
+            seconds = max(seconds, min(600.0, exc.retry_after))
 
         if seconds:
             self._blocked_until[name] = time.time() + seconds
@@ -75,6 +82,7 @@ class Router:
             "message": redact(str(exc), self.secrets),
             "at": time.time(),
             "daily_quota": daily_quota,
+            "retry_after": exc.retry_after,
             "cooldown_seconds": int(seconds),
         }
         if daily_quota:
@@ -122,30 +130,50 @@ class Router:
         attempts: list[dict[str, Any]] = []
         for name in order:
             provider = self.providers[name]
-            try:
-                text = provider.complete(
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    timeout=timeout,
+            waits = 0
+            while True:
+                try:
+                    text = provider.complete(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        timeout=timeout,
+                    )
+                except ProviderError as exc:
+                    hint = exc.retry_after
+                    # "Please try again in 9s" is worth waiting for; anything
+                    # longer means fall back now.
+                    if (
+                        hint is not None
+                        and exc.kind in RETRYABLE_KINDS
+                        and self.wait_cap
+                        and hint <= self.wait_cap
+                        and waits < 2
+                    ):
+                        waits += 1
+                        delay = min(self.wait_cap, hint) + 0.25
+                        log.warning(
+                            "%s asked to retry in %.1fs; waiting instead of failing",
+                            name, hint,
+                        )
+                        time.sleep(delay)
+                        continue
+                    attempts.append(exc.to_dict())
+                    self._record_failure(name, exc)
+                    break
+                except Exception as exc:  # noqa: BLE001 - never leak a raw crash
+                    wrapped = ProviderError(name, f"{type(exc).__name__}: {exc}")
+                    attempts.append(wrapped.to_dict())
+                    self._record_failure(name, wrapped)
+                    break
+                self._record_success(name)
+                attempts.append({"provider": name, "ok": True})
+                return LLMResult(
+                    text=text,
+                    provider=name,
+                    model=provider.current_model(),
+                    attempts=attempts,
                 )
-            except ProviderError as exc:
-                attempts.append(exc.to_dict())
-                self._record_failure(name, exc)
-                continue
-            except Exception as exc:  # noqa: BLE001 - defensive: never leak a raw crash
-                wrapped = ProviderError(name, f"{type(exc).__name__}: {exc}")
-                attempts.append(wrapped.to_dict())
-                self._record_failure(name, wrapped)
-                continue
-            self._record_success(name)
-            attempts.append({"provider": name, "ok": True})
-            return LLMResult(
-                text=text,
-                provider=name,
-                model=provider.current_model(),
-                attempts=attempts,
-            )
 
         summary = " | ".join(
             truncate(str(item.get("message", "failed")), 600) for item in attempts

@@ -29,10 +29,12 @@ class ProviderError(RuntimeError):
         kind: str = OTHER,
         status: int | None = None,
         retryable: bool | None = None,
+        retry_after: float | None = None,
     ):
         self.provider = provider
         self.kind = kind
         self.status = status
+        self.retry_after = retry_after
         self.retryable = kind in RETRYABLE_KINDS if retryable is None else retryable
         super().__init__(f"{provider}: {message}")
 
@@ -41,6 +43,8 @@ class ProviderError(RuntimeError):
         label = f"[{self.kind}"
         if self.status:
             label += f" HTTP {self.status}"
+        if self.retry_after is not None:
+            label += f" retry_in={self.retry_after}s"
         label += "]"
         return f"{label} {super().__str__()}"
 
@@ -49,6 +53,7 @@ class ProviderError(RuntimeError):
             "provider": self.provider,
             "kind": self.kind,
             "status": self.status,
+            "retry_after": self.retry_after,
             "message": str(self),
         }
 

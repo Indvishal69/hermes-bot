@@ -18,7 +18,7 @@ import logging
 import time
 from typing import Any, Iterable
 
-from ..utils import backoff_delay, redact, truncate
+from ..utils import backoff_delay, parse_retry_after, redact, truncate
 from .base import (
     AUTH,
     BLOCKED,
@@ -290,6 +290,7 @@ class GeminiProvider(Provider):
                     kind=kind,
                     status=status,
                     retryable=retryable,
+                    retry_after=parse_retry_after(str(exc)),
                 )
                 if kind == MODEL and not resolved_once:
                     # The ID may have been retired: re-discover and retry once.

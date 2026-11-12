@@ -46,5 +46,6 @@ def build_router(settings, *, session=None) -> Router:
         order,
         cooldown=settings.provider_cooldown,
         quota_cooldown=settings.quota_cooldown,
+        wait_cap=settings.rate_limit_wait_cap,
         secrets=settings.secrets,
     )
