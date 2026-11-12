@@ -178,7 +178,7 @@ hermes/
   bot.py                     Discord commands and status messages (agent loop is `agent_loop`)
   web.py                     Flask health endpoints
   integrations/              GitHub, Render, Vercel, Cloudflare, Hugging Face
-tests/                       180 pytest tests (no network, no credentials needed)
+tests/                       181 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 

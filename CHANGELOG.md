@@ -20,7 +20,9 @@ Gemini, never checked whether a model actually existed for the key.
   cannot outlive `AI_TIMEOUT`; a timed-out call now reports the last provider error.
 * `providers/base.py::choose_model` is shared by Groq and Gemini instead of two
   near-identical selectors.
-* `tests/test_groq.py`: 26 new tests (180 total).
+* Provider model IDs are resolved at startup (`on_ready`), so `!health` and `!model`
+  show the model actually in use instead of a stale configured value.
+* `tests/test_groq.py`: 26 new tests (181 total).
 * Docs: README, `.env.example`, `render.yaml`, deployment notes and test report
   updated for the Groq model change.
 
