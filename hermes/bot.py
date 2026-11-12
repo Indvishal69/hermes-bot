@@ -96,7 +96,11 @@ class HermesBot(discord.Client):
         self.workspace = workspace
         self.runner = runner
         self.toolbox = toolbox
-        self.loop = loop
+        # NOTE: never name this ``self.loop``. ``discord.Client`` owns a ``loop``
+        # attribute and ``_async_setup_hook`` overwrites it with the running
+        # asyncio loop at startup, which turned ``self.loop.handle(...)`` into
+        # ``_UnixSelectorEventLoop.handle`` -> AttributeError on every message.
+        self.agent_loop = loop
         self.approvals = approvals
         self.started_at = started_at
         self._task_lock = asyncio.Lock()
@@ -407,7 +411,7 @@ class HermesBot(discord.Client):
         if command == "!deny":
             self.db.audit(message.author.id, "command_denied", approval.command, ok=True)
             await message.channel.send(f"🚫 Denied `{approval.command[:300]}`.")
-            run = await self.loop.resume(
+            run = await self.agent_loop.resume(
                 approval,
                 command_result="(not run)",
                 notify=self._noop_notify,
@@ -431,7 +435,7 @@ class HermesBot(discord.Client):
             f"{truncate(result.output, 1_400)}\n```",
         )
         status = StatusMessage(await message.channel.send("🧠 Continuing after the command…"))
-        run = await self.loop.resume(
+        run = await self.agent_loop.resume(
             approval,
             command_result=result.summary(),
             notify=self._notify(status),
@@ -452,7 +456,7 @@ class HermesBot(discord.Client):
         async with self._task_lock:
             self._last_task[message.author.id] = time.time()
             self._tasks_run += 1
-            run = await self.loop.handle(
+            run = await self.agent_loop.handle(
                 user_id=message.author.id,
                 channel_id=message.channel.id,
                 prompt=text,
