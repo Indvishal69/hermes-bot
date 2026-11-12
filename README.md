@@ -40,7 +40,7 @@ Flask:  /health  /ready  /           (Render health checks)
 * **Approval gate** for every shell command, with expiry, denial path and audit log.
 * **Memory**: conversation history, project notes, task history, audit trail,
   online SQLite backups and forward-only migrations.
-* **Connectors** — GitHub, Notion, Slack, Render, Vercel, Cloudflare and Hugging Face
+* **Connectors** — GitHub, Notion, Slack, Netlify, Render, Vercel, Cloudflare and Hugging Face
   as pluggable tools: credentials from env vars, enabled state and settings saved in
   SQLite, read tools free, write tools behind `!approve`. See
   [docs/CONNECTORS.md](docs/CONNECTORS.md).
@@ -168,6 +168,7 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `GITHUB_TOKEN` | *(empty)* | GitHub connector (fine-grained: Contents + Issues read/write) |
 | `NOTION_TOKEN` | *(empty)* | Notion connector |
 | `SLACK_BOT_TOKEN` | *(empty)* | Slack connector (`channels:read`, `chat:write`) |
+| `NETLIFY_TOKEN` | *(empty)* | Netlify connector (sites, deploys, trigger build) |
 | `RENDER_API_KEY` | *(empty)* | Render connector |
 | `VERCEL_TOKEN` | *(empty)* | Vercel connector |
 | `CLOUDFLARE_API_TOKEN` | *(empty)* | Cloudflare connector |
@@ -205,7 +206,7 @@ hermes/
   connectors/                pluggable services: base, registry, github, notion,
                              slack, platforms (render/vercel/cloudflare/hf)
   browsing/                  web fetch + SSRF guard, search, optional browser
-tests/                       275 pytest tests (no network, no credentials needed)
+tests/                       280 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 

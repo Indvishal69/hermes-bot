@@ -50,6 +50,7 @@ Three rules the code enforces:
 | `github` | `GITHUB_TOKEN` | `github_whoami` R, `github_list_repos` R, `github_get_repo` R, `github_list_branches` R, `github_get_file` R, `github_list_issues` R, `github_list_pulls` R, `github_create_issue` W, `github_commit_file` W |
 | `notion` | `NOTION_TOKEN` | `notion_search` R, `notion_get_page` R, `notion_query_database` R, `notion_append_text` W |
 | `slack` | `SLACK_BOT_TOKEN` | `slack_list_channels` R, `slack_post_message` W |
+| `netlify` | `NETLIFY_TOKEN` | `netlify_list_sites` R, `netlify_get_site` R, `netlify_list_deploys` R, `netlify_get_deploy` R, `netlify_trigger_build` W, `netlify_cancel_deploy` W |
 | `render` | `RENDER_API_KEY` | `render_list_services` R, `render_list_deploys` R, `render_trigger_deploy` W |
 | `vercel` | `VERCEL_TOKEN` | `vercel_list_projects` R, `vercel_list_deployments` R |
 | `cloudflare` | `CLOUDFLARE_API_TOKEN` | `cloudflare_verify_token` R, `cloudflare_purge_cache` W |
@@ -66,6 +67,9 @@ Missing env vars are shown by name in `!connectors` — never their values.
 * **Notion** — create an internal integration, share the pages/databases with it, copy
   the token. A pasted Notion URL is accepted wherever an id is asked for.
 * **Slack** — bot token with `channels:read` and `chat:write`.
+* **Netlify** — personal access token (User settings → Applications → Personal access
+  tokens). Read tools work with any token; `netlify_trigger_build` needs the *build*
+  permission, and the site must have build settings or a linked repo.
 * **Render** — API key from Account Settings → API Keys.
 * **Vercel** — token from Account Settings → Tokens.
 * **Cloudflare** — API token with *Zone.Cache Purge* for the zone you name.
@@ -78,6 +82,7 @@ Missing env vars are shown by name in `!connectors` — never their values.
 | `github` | `default_repo` | `owner/name` used when a tool call omits `repo` |
 | `notion` | `default_page`, `default_database` | used when an id is omitted |
 | `slack` | `default_channel` | channel id or `#name` |
+| `netlify` | `default_site` | site id or site name |
 | `render` | `default_service` | service id |
 | `cloudflare` | `default_zone` | zone id |
 

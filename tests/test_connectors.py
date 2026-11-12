@@ -16,6 +16,7 @@ from hermes.connectors.base import (
     safe_repo,
 )
 from hermes.connectors.github import GitHubConnector
+from hermes.connectors.netlify import NetlifyConnector
 from hermes.connectors.notion import NotionConnector
 from hermes.connectors.platforms import CloudflareConnector, RenderConnector
 from hermes.connectors.registry import ConnectorRegistry
@@ -370,3 +371,65 @@ def test_connector_without_credentials_cannot_build_a_client():
     assert connector.configured is False
     with pytest.raises(ConnectorError):
         connector.list_repos()
+
+
+# --------------------------------------------------------------------------
+# Netlify
+# --------------------------------------------------------------------------
+def test_netlify_lists_sites_and_deploys():
+    session = FakeSession([
+        (200, [{"id": "site1", "name": "hermes-demo",
+                "ssl_url": "https://hermes-demo.netlify.app",
+                "build_settings": {"repo_url": "https://github.com/a/b"}}]),
+        (200, [{"id": "dep1", "state": "ready", "branch": "main", "context": "production",
+                "created_at": "2026-11-12T10:00:00Z",
+                "deploy_ssl_url": "https://hermes-demo.netlify.app"}]),
+    ])
+    connector = NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {"default_site": "hermes-demo"},
+                                 session=session)
+    sites = connector.list_sites()
+    assert "hermes-demo" in sites and "site1" in sites
+    deploys = connector.list_deploys()
+    assert "dep1" in deploys and "state=ready" in deploys
+    assert session.calls[1]["url"].endswith("/sites/hermes-demo/deploys")
+
+
+def test_netlify_site_detail_and_default_site_requirement():
+    session = FakeSession([(200, {"id": "site1", "name": "demo",
+                                  "ssl_url": "https://demo.netlify.app",
+                                  "admin_url": "https://app.netlify.com/sites/demo",
+                                  "build_settings": {"repo_url": "https://github.com/a/b",
+                                                     "repo_branch": "main", "cmd": "npm run build",
+                                                     "dir": "dist"}})])
+    detail = NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {"default_site": "demo"},
+                              session=session).get_site()
+    assert "npm run build" in detail and "dist" in detail
+
+    with pytest.raises(ConnectorError) as excinfo:
+        NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {}, session=FakeSession()).get_site()
+    assert "default_site" in str(excinfo.value)
+
+
+def test_netlify_trigger_build_posts_to_the_site():
+    session = FakeSession([(200, {"deploy_id": "dep2"})])
+    connector = NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {"default_site": "demo"},
+                                 session=session)
+    assert "dep2" in connector.trigger_build()
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/sites/demo/builds")
+
+
+def test_netlify_cancel_deploy_and_id_validation():
+    session = FakeSession([(200, {})])
+    connector = NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {}, session=session)
+    assert "dep1" in connector.cancel_deploy("dep1")
+    assert session.calls[0]["url"].endswith("/deploys/dep1/cancel")
+    with pytest.raises(ConnectorError):
+        connector.cancel_deploy("../../etc")
+
+
+def test_netlify_write_tools_require_approval():
+    connector = NetlifyConnector({"NETLIFY_TOKEN": "nfp_x"}, {}, session=FakeSession())
+    writes = {tool.name for tool in connector.tools() if tool.write}
+    assert writes == {"netlify_trigger_build", "netlify_cancel_deploy"}

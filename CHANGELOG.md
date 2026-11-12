@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.2.1 — 12 November 2026
+
+**New connector: Netlify** (`NETLIFY_TOKEN`).
+
+* `netlify_list_sites`, `netlify_get_site`, `netlify_list_deploys`,
+  `netlify_get_deploy` — read.
+* `netlify_trigger_build`, `netlify_cancel_deploy` — write, so they go through
+  `!approve` like every other remote change.
+* Setting: `!connector netlify set default_site=<id or name>`.
+* `!connector netlify test` lists one site to prove the token works.
+* Tests: 5 new (280 total). Connector count: 8.
+
 ## 3.2.0 — 12 November 2026
 
 **New: web access for the agent.**
