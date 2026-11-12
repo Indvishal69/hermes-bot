@@ -43,8 +43,12 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      # Optional integrations
+      # Connectors — set only the ones you use
       - key: GITHUB_TOKEN
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: SLACK_BOT_TOKEN
         sync: false
       - key: RENDER_API_KEY
         sync: false

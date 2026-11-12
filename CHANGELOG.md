@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.1.0 — 12 November 2026
+
+**New: a connector system.** External services are now pluggable tools for the agent,
+with saved state.
+
+* `hermes/connectors/`: `Connector` base class, `ConnectorRegistry`, and seven
+  connectors — GitHub, Notion, Slack, Render, Vercel, Cloudflare, Hugging Face (20
+  tools). Replaces the earlier `hermes/integrations/` package, which was prepared but
+  never reachable by the model.
+* Credentials come from environment variables only; enabled/disabled state and
+  non-secret settings (default repo, database id, channel, service, zone) are stored in
+  a new `connectors` table (schema v3) and survive restarts.
+* Read tools run freely; write tools (`github_create_issue`, `github_commit_file`,
+  `notion_append_text`, `slack_post_message`, `render_trigger_deploy`,
+  `cloudflare_purge_cache`) go through the same `!approve` gate as shell commands. The
+  approval payload now carries a `kind`, so `!approve` knows whether to run a command
+  or a connector action.
+* New commands: `!connectors` (alias `!integrations`), `!connect`, `!disconnect`,
+  `!connector <name>`, `!connector <name> test`, `!connector <name> set key=value`.
+* Model input is validated as identifiers before any request; a tool call cannot choose
+  a host or traverse paths. Every connector error is redacted.
+* `docs/CONNECTORS.md`: how it works, token scopes, settings, and how to add your own
+  connector.
+* Tests: 41 connector tests plus loop/bot coverage — 235 total.
+
 ## 3.0.2 — 12 November 2026
 
 **Fixed: Groq tasks failed with `HTTP 404 model_not_found`, and Gemini 503 bursts

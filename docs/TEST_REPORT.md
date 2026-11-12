@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-181 passed in 23.98s
+235 passed in 13.65s
 ```
 
 Coverage by area (all passing):
@@ -43,9 +43,10 @@ Coverage by area (all passing):
 | `tests/test_shell.py` (42) | 11 legitimate commands allowed (incl. `pip install python-dotenv` — a 2.0 false positive); 20 dangerous commands rejected (`rm -rf /`, `sudo`, `curl`, `bash -c`, `&&`, pipes, `>`, `os.environ`, `.env`, `git push`, `git reset --hard`, absolute paths, …); `git push` only with `ALLOW_GIT_PUSH`; force-push always blocked; real execution with exit codes; timeout kills the process; rejected command never runs; **child process cannot see `DISCORD_TOKEN`/`GROQ_API_KEY`**; syntax checker; process registry |
 | `tests/test_router.py` (11) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
 | `tests/test_gemini.py` (26) | name normalisation; text-model filtering (tts/live/image/embedding/transcribe/computer-use excluded, `supportedActions` respected); configured-model preference; fallback to preferred; auto-selection; flash preference; empty-list behaviour; **roles preserved** (`user/model/user`), consecutive turns merged, `system_instruction` passed; retired model triggers re-discovery + retry; auth error not retried; quota classified retryable; `finish_reason=SAFETY` reported as blocked; listing error surfaced |
-| `tests/test_loop.py` (12) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
+| `tests/test_loop.py` (16) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
 | `tests/test_groq.py` (26) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
-| `tests/test_bot.py` (12) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
+| `tests/test_connectors.py` (41) | input validation (`safe_id`/`safe_path`/`safe_repo` reject traversal, spaces, hosts); HttpClient refuses absolute URLs and adds hints on 401/404; registry: active-by-default, missing env, disable/enable persistence across a restart, settings validation and persistence, tool-spec approval flags, secret redaction in errors; real connectors against fake HTTP (GitHub repo/file/issue, Notion page-URL parsing and paragraph blocks, Slack `ok:false`, Cloudflare purge body, Render deploy URL) |
+| `tests/test_bot.py` (21) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
 | `tests/test_web_and_utils.py` (10) | `/health` 200 + payload; **no paths or secrets in the response**; unhealthy database → 503; `/ready` and `/`; redaction of key shapes; JSON extraction (plain, fenced, embedded, malformed); backoff growth and cap; truncate/chunk; human helpers |
 
 ## 3. Preflight (`python agent.py --check`)
@@ -210,3 +211,37 @@ raised after 10.0s: ProviderError
 
 Gemini still completes through the real SDK with the new per-request timeout
 (`gemini reply: gemini-ok ...`).
+
+
+## 10. Connector system (3.1.0)
+
+Verified end to end with fake credentials in a real registry, real database and the
+real bot object:
+
+```
+github       configured=True  enabled=True  tools=9 missing=[]
+notion       configured=True  enabled=True  tools=4 missing=[]
+slack        configured=False enabled=False tools=2 missing=['SLACK_BOT_TOKEN']
+...
+active tools: 13
+
+**Connectors** — 2/7 connected
+• **github** — connected (9 tools)
+• **slack** — not configured — needs SLACK_BOT_TOKEN
+```
+
+What that proves:
+
+* Only configured connectors expose tools (13 tools from 2 connectors, not 20 from 7).
+* Missing credentials are reported **by variable name**, never by value.
+* The agent prompt lists exactly those tools, with `[OWNER APPROVAL REQUIRED]` on the
+  write ones (`github_create_issue`, `github_commit_file`, `notion_append_text`, …).
+* Disabling survives a restart: after `disable("notion")` a freshly built registry
+  reports `notion active: False` and exposes 9 tools (GitHub only) — the state is in
+  SQLite, not in memory.
+* A write call produces an approval payload and does not run:
+  `requires_approval: True | kind: connector | tool: github_create_issue |
+  args: {'title': 't', 'body': 'b', 'repo': 'a/b'}`, and the audit row is
+  `connector_requested`.
+* `reason` is stripped from tool arguments before the call (it explains the request to
+  you; passing it through would have failed validation).

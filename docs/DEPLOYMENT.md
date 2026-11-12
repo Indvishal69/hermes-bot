@@ -124,6 +124,15 @@ journalctl -u hermes -f
 `/data` and `DATA_DIR=/data`. Both keep the filesystem across restarts on their
 paid tiers; Fly's free allowances change often, so check current pricing.
 
+## Connectors
+
+Connectors read their credentials from environment variables — add the ones you use
+(`GITHUB_TOKEN`, `NOTION_TOKEN`, `SLACK_BOT_TOKEN`, `RENDER_API_KEY`, `VERCEL_TOKEN`,
+`CLOUDFLARE_API_TOKEN`, `HF_TOKEN`) in the dashboard, then run `!connectors` in Discord.
+Enabled/disabled state and saved settings live in the SQLite database, so they survive
+restarts but **not** a redeploy on the free plan (ephemeral disk). Details and token
+scopes: [CONNECTORS.md](CONNECTORS.md).
+
 ## Verifying a deployment
 
 ```bash

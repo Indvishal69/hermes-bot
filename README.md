@@ -2,8 +2,9 @@
 
 An owner-only Discord bot that acts as a controlled autonomous engineer: it plans,
 writes and edits files inside its own workspace, runs Python/Node tooling behind an
-explicit approval gate, keeps persistent SQLite memory, and falls back between Groq
-and Google Gemini when a provider fails.
+explicit approval gate, keeps persistent SQLite memory, talks to GitHub, Notion, Slack
+and other services through pluggable **connectors**, and falls back between Groq and
+Google Gemini when a provider fails.
 
 ```
 Discord (owner only)
@@ -36,8 +37,13 @@ Flask:  /health  /ready  /           (Render health checks)
 * **Approval gate** for every shell command, with expiry, denial path and audit log.
 * **Memory**: conversation history, project notes, task history, audit trail,
   online SQLite backups and forward-only migrations.
+* **Connectors** — GitHub, Notion, Slack, Render, Vercel, Cloudflare and Hugging Face
+  as pluggable tools: credentials from env vars, enabled state and settings saved in
+  SQLite, read tools free, write tools behind `!approve`. See
+  [docs/CONNECTORS.md](docs/CONNECTORS.md).
 * **Discord commands**: `!help !health !status !model !models !workspace !memory
-  !reset !tasks !approve !deny !backup !testai !integrations !restart`.
+  !reset !tasks !approve !deny !backup !testai !connectors !connect !disconnect
+  !connector !restart`.
 * **Honest limits**: no claim of a test/commit/deploy that a tool result did not
   produce, and `python agent.py --check` for a real preflight.
 
@@ -119,7 +125,10 @@ Then in Discord, DM the bot or mention it in a channel it can read: `!health`, t
 | `!deny <id>` | Reject it and let the agent adapt |
 | `!backup` | Write a consistent SQLite backup |
 | `!testai` | Test each provider independently, showing real errors |
-| `!integrations` | Which integration credentials are present |
+| `!connectors` | Connectors: connected / configured / missing env vars |
+| `!connect NAME` / `!disconnect NAME` | Enable or disable a connector (saved) |
+| `!connector NAME [test]` | Detail, live check |
+| `!connector NAME set key=value` | Save a non-secret setting |
 | `!restart` | Restart the process (`os.execv`) |
 
 Anything else is treated as a task. Tasks are rate-limited (`TASK_RATE_LIMIT`,
@@ -152,7 +161,13 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `ALLOW_GIT_PUSH` | `false` | Keep false unless you want `git push` possible |
 | `PORT` | `10000` | Flask health server |
 | `LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING` |
-| `GITHUB_TOKEN`, `RENDER_API_KEY`, `VERCEL_TOKEN`, `CLOUDFLARE_API_TOKEN`, `HF_TOKEN` | *(empty)* | Optional integrations |
+| `GITHUB_TOKEN` | *(empty)* | GitHub connector (fine-grained: Contents + Issues read/write) |
+| `NOTION_TOKEN` | *(empty)* | Notion connector |
+| `SLACK_BOT_TOKEN` | *(empty)* | Slack connector (`channels:read`, `chat:write`) |
+| `RENDER_API_KEY` | *(empty)* | Render connector |
+| `VERCEL_TOKEN` | *(empty)* | Vercel connector |
+| `CLOUDFLARE_API_TOKEN` | *(empty)* | Cloudflare connector |
+| `HF_TOKEN` | *(empty)* | Hugging Face connector |
 
 Bad values never crash the process: they are reported, and the documented default
 is used (for example `MAX_AGENT_STEPS=many` logs a warning and uses 8).
@@ -177,8 +192,9 @@ hermes/
   core/loop.py               plan → act → observe, approvals
   bot.py                     Discord commands and status messages (agent loop is `agent_loop`)
   web.py                     Flask health endpoints
-  integrations/              GitHub, Render, Vercel, Cloudflare, Hugging Face
-tests/                       181 pytest tests (no network, no credentials needed)
+  connectors/                pluggable services: base, registry, github, notion,
+                             slack, platforms (render/vercel/cloudflare/hf)
+tests/                       235 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
@@ -196,7 +212,8 @@ provider calls can only be verified with your own keys — use `!testai` for tha
 ## Deployment
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render (including what the free
-plan really does to a Discord bot), Railway, Fly.io and a plain VPS.
+plan really does to a Discord bot), Railway, Fly.io and a plain VPS, and
+[docs/CONNECTORS.md](docs/CONNECTORS.md) for the connector system.
 
 ## License / ownership
 
