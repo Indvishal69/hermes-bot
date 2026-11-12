@@ -80,14 +80,14 @@ class Settings:
     # --- agent behaviour ---------------------------------------------------
     max_agent_steps: int = 8
     ai_timeout: int = 150
-    max_history_messages: int = 20
+    max_history_messages: int = 10
     temperature: float = 0.2
-    max_completion_tokens: int = 3000
+    max_completion_tokens: int = 1500
     # --- workspace / shell -------------------------------------------------
     data_dir: Path = PROJECT_ROOT / "data"
     workspace_dir: Path = PROJECT_ROOT / "data" / "workspace"
     max_file_bytes: int = 200_000
-    max_output_chars: int = 7_000
+    max_output_chars: int = 4_000
     command_timeout: int = 45
     allow_git_push: bool = False
     approval_ttl: int = 900
@@ -107,6 +107,7 @@ class Settings:
     log_level: str = "INFO"
     provider_cooldown: int = 60
     quota_cooldown: int = 3_600
+    rate_limit_wait_cap: int = 20
     model_cache_ttl: int = 3_600
     task_rate_limit: int = 3
     # --- integrations ------------------------------------------------------
@@ -259,13 +260,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         gemini_api_base=_get(env, "GEMINI_API_BASE"),
         max_agent_steps=_get_int(env, "MAX_AGENT_STEPS", 8, problems, 1, 25),
         ai_timeout=_get_int(env, "AI_TIMEOUT", 150, problems, 10, 600),
-        max_history_messages=_get_int(env, "MAX_HISTORY_MESSAGES", 20, problems, 0, 200),
+        max_history_messages=_get_int(env, "MAX_HISTORY_MESSAGES", 10, problems, 0, 200),
         temperature=temperature,
-        max_completion_tokens=_get_int(env, "MAX_COMPLETION_TOKENS", 3000, problems, 128, 32000),
+        max_completion_tokens=_get_int(env, "MAX_COMPLETION_TOKENS", 1500, problems, 128, 32000),
         data_dir=data_dir,
         workspace_dir=workspace_dir,
         max_file_bytes=_get_int(env, "MAX_FILE_BYTES", 200_000, problems, 1_024, 5_000_000),
-        max_output_chars=_get_int(env, "MAX_OUTPUT_CHARS", 7_000, problems, 500, 60_000),
+        max_output_chars=_get_int(env, "MAX_OUTPUT_CHARS", 4_000, problems, 500, 60_000),
         command_timeout=_get_int(env, "COMMAND_TIMEOUT", 45, problems, 1, 600),
         allow_git_push=_get_bool(env, "ALLOW_GIT_PUSH", False),
         approval_ttl=_get_int(env, "APPROVAL_TTL", 900, problems, 30, 86_400),
@@ -287,6 +288,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         log_level=_get(env, "LOG_LEVEL", "INFO").upper() or "INFO",
         provider_cooldown=_get_int(env, "PROVIDER_COOLDOWN", 60, problems, 0, 3_600),
         quota_cooldown=_get_int(env, "QUOTA_COOLDOWN", 3_600, problems, 0, 86_400),
+        rate_limit_wait_cap=_get_int(env, "RATE_LIMIT_WAIT_CAP", 20, problems, 0, 60),
         model_cache_ttl=_get_int(env, "MODEL_CACHE_TTL", 3_600, problems, 0, 86_400),
         task_rate_limit=_get_int(env, "TASK_RATE_LIMIT", 3, problems, 0, 600),
         github_token=_get(env, "GITHUB_TOKEN"),

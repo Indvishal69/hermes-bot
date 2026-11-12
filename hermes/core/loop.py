@@ -192,6 +192,25 @@ class AgentLoop:
     def _clean(self, text: Any) -> str:
         return redact(truncate(text, 1_600), self.settings.secrets)
 
+    @staticmethod
+    def _rate_limit_hint(exc: ProviderError) -> str:
+        """Explain a rate-limit failure in terms the owner can act on."""
+        detail = str(exc).lower()
+        if "429" not in detail and exc.kind != "quota" and "rate limit" not in detail:
+            return ""
+        parts = ["Both AI providers refused the request (rate limit / quota)."]
+        retry = getattr(exc, "retry_after", None)
+        if retry:
+            parts.append(f"The provider asked to retry in about {int(retry)}s.")
+        else:
+            parts.append("Wait about a minute and send the task again.")
+        parts.append(
+            "Groq's free tier is 8,000 tokens/minute and Gemini's free tier is 20 "
+            "requests/day on gemini-3.8-flash, so long tasks hit these quickly. "
+            "Lower MAX_AGENT_STEPS or MAX_HISTORY_MESSAGES, or upgrade the provider plan."
+        )
+        return " ".join(parts)
+
     def _provider_errors(self) -> str:
         """Short "provider: last error" summary for failed/timed-out calls."""
         try:
@@ -325,6 +344,9 @@ class AgentLoop:
                 return AgentRun(text=text, status="failed", steps=step, task_id=task_id, error=text)
             except ProviderError as exc:
                 text = f"AI providers failed: {self._clean(exc)}"
+                hint = self._rate_limit_hint(exc)
+                if hint:
+                    text = f"{hint}\n\n{text}"
                 return AgentRun(text=text, status="failed", steps=step, task_id=task_id, error=text)
             except Exception as exc:  # noqa: BLE001 - never crash the bot
                 text = f"Unexpected AI error: {type(exc).__name__}: {self._clean(exc)}"
