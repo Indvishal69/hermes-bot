@@ -7,3 +7,8 @@ requests>=2.31,<3
 # Google's official Gemini SDK. Do not pin <2: 1.x predates current model
 # families and endpoint behaviour, which is one reason Gemini calls failed.
 google-genai>=1.0,<4
+
+# Optional: only for the headless browser (BROWSER_ENABLED=true).
+# It needs >= 1 GB RAM, so it is not installed by default:
+#   pip install playwright && playwright install --with-deps chromium
+# playwright>=1.40

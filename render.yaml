@@ -34,6 +34,15 @@ services:
         value: "45"
       - key: LOG_LEVEL
         value: INFO
+      - key: WEB_ENABLED
+        value: "true"
+      # A headless browser needs >= 1 GB RAM; keep false on the free plan.
+      - key: BROWSER_ENABLED
+        value: "false"
+      - key: SEARCH_PROVIDER
+        sync: false
+      - key: SEARCH_API_KEY
+        sync: false
       # Secrets: set these in the Render dashboard, never in this file.
       - key: DISCORD_TOKEN
         sync: false

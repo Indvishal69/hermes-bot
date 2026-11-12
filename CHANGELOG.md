@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.2.0 — 12 November 2026
+
+**New: web access for the agent.**
+
+* `hermes/browsing/`: `web_fetch` and `web_links` (plain HTTP + stdlib HTML→text),
+  `web_search` (Tavily / Brave / SearXNG), and `browser_open` (headless Chromium via
+  Playwright, opt-in).
+* SSRF guard on every URL: http/https only, no embedded credentials, ports 80/443 only,
+  `localhost`/`*.internal` blocked, IP literals checked directly, hostnames refused when
+  they resolve to loopback/RFC1918/link-local/CGNAT/reserved, and every redirect hop
+  re-validated (max 3). Optional `WEB_ALLOWED_DOMAINS` allowlist.
+* Fetch limits: 2 MB body cap, 7000 chars to the model, 10s connect / `WEB_TIMEOUT` read,
+  non-text content refused with a clear message.
+* Prompt-injection stance made explicit: fetched pages and search results are returned
+  with an "untrusted data" header and a matching system-prompt rule; the approval gate
+  still covers every write.
+* `!web <url>` shows exactly what the agent would read; `!health` reports fetch/search/
+  browser capability.
+* The headless browser is off by default and documented as needing ≥1 GB RAM — Chromium
+  does not fit a Render free instance. When Playwright is missing, `browser_open` says so
+  with the exact install commands.
+* Tests: 37 browsing tests plus loop coverage — 275 total.
+* Docs: `docs/BROWSER.md`.
+
 ## 3.1.0 — 12 November 2026
 
 **New: a connector system.** External services are now pluggable tools for the agent,

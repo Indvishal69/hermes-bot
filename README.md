@@ -28,6 +28,9 @@ Flask:  /health  /ready  /           (Render health checks)
   `client.models.list()`, real multi-turn `contents`, `system_instruction`
   preserved, quota/auth/model/blocked errors reported verbatim, retry with
   backoff, automatic re-discovery if a model ID is retired.
+* **Web access** — `web_fetch` / `web_links` (strict SSRF guard, stdlib HTML→text),
+  `web_search` (Tavily/Brave/SearXNG) and an opt-in headless browser for JavaScript
+  pages. See [docs/BROWSER.md](docs/BROWSER.md).
 * **Provider fallback** with per-provider cooldown and a `!model` switch.
 * **Model-availability checks for both providers** — Groq and Gemini IDs are checked
   against the account's model list and a working replacement is chosen when one is
@@ -129,6 +132,7 @@ Then in Discord, DM the bot or mention it in a channel it can read: `!health`, t
 | `!connect NAME` / `!disconnect NAME` | Enable or disable a connector (saved) |
 | `!connector NAME [test]` | Detail, live check |
 | `!connector NAME set key=value` | Save a non-secret setting |
+| `!web <url>` | Fetch a page and show what the agent would read |
 | `!restart` | Restart the process (`os.execv`) |
 
 Anything else is treated as a task. Tasks are rate-limited (`TASK_RATE_LIMIT`,
@@ -168,6 +172,12 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `VERCEL_TOKEN` | *(empty)* | Vercel connector |
 | `CLOUDFLARE_API_TOKEN` | *(empty)* | Cloudflare connector |
 | `HF_TOKEN` | *(empty)* | Hugging Face connector |
+| `WEB_ENABLED` | `true` | Web fetch/link/search tools |
+| `WEB_TIMEOUT` / `WEB_MAX_BYTES` / `WEB_MAX_CHARS` | `20` / `2000000` / `7000` | Fetch limits |
+| `WEB_ALLOWED_DOMAINS` | *(empty)* | Optional comma-separated allowlist |
+| `SEARCH_PROVIDER` / `SEARCH_API_KEY` / `SEARXNG_URL` | *(empty)* | Web search backend |
+| `BROWSER_ENABLED` | `false` | Headless Chromium for JS pages (needs ≥1 GB RAM) |
+| `BROWSER_TIMEOUT` | `30` | Page load timeout |
 
 Bad values never crash the process: they are reported, and the documented default
 is used (for example `MAX_AGENT_STEPS=many` logs a warning and uses 8).
@@ -194,7 +204,8 @@ hermes/
   web.py                     Flask health endpoints
   connectors/                pluggable services: base, registry, github, notion,
                              slack, platforms (render/vercel/cloudflare/hf)
-tests/                       235 pytest tests (no network, no credentials needed)
+  browsing/                  web fetch + SSRF guard, search, optional browser
+tests/                       275 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
@@ -213,7 +224,8 @@ provider calls can only be verified with your own keys — use `!testai` for tha
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render (including what the free
 plan really does to a Discord bot), Railway, Fly.io and a plain VPS, and
-[docs/CONNECTORS.md](docs/CONNECTORS.md) for the connector system.
+[docs/CONNECTORS.md](docs/CONNECTORS.md) for the connector system and
+[docs/BROWSER.md](docs/BROWSER.md) for web access.
 
 ## License / ownership
 

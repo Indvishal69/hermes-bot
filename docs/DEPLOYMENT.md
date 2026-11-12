@@ -133,6 +133,13 @@ Enabled/disabled state and saved settings live in the SQLite database, so they s
 restarts but **not** a redeploy on the free plan (ephemeral disk). Details and token
 scopes: [CONNECTORS.md](CONNECTORS.md).
 
+## Web access
+
+`web_fetch` and `web_links` are on by default and need no key. Web search needs a
+provider (`SEARCH_PROVIDER` + `SEARCH_API_KEY`, or `SEARXNG_URL`). The headless browser
+(`BROWSER_ENABLED`) needs at least 1 GB RAM, so leave it off on the free plan — Chromium
+alone would exhaust the 512 MB instance. Details: [BROWSER.md](BROWSER.md).
+
 ## Verifying a deployment
 
 ```bash
