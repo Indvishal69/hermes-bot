@@ -379,3 +379,21 @@ def test_web_fetch_rejects_private_hosts_inside_the_loop(settings, public_dns):
     result = run(loop.handle(user_id=1, channel_id=2, prompt="fetch metadata", notify=run(collect([]))))
     assert result.status == "completed"
     assert "non-public" in router.seen[-1][-1]["content"]
+
+
+def test_rate_limit_failure_explains_what_to_do(settings):
+    limited = ProviderError(
+        "router",
+        "All providers failed. groq: HTTP 429: Rate limit reached for model "
+        "openai/gpt-oss-120b on tokens per minute (TPM): Limit 8000, Used 7151. "
+        "Please try again in 9.1425s.",
+    )
+    limited.retry_after = 9.14
+    router = ScriptedRouter([limited])
+    loop, _toolbox = build_with_web(settings, router)
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="hi", notify=run(collect([]))))
+    assert result.status == "failed"
+    assert "rate limit" in result.text.lower()
+    assert "9s" in result.text
+    assert "MAX_AGENT_STEPS" in result.text
+    assert "HTTP 429" in result.text        # the raw detail is still there

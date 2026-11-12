@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.2.3 — 12 November 2026
+
+**Fixed: a 9-second rate limit turned into a failed task.**
+
+Groq's free tier allows **8,000 tokens/minute** on `openai/gpt-oss-120b`. Its 429 said
+"Please try again in 9.1425s", but Hermes retried within 1.5s and 2.25s (too early),
+then quarantined Groq for 60s — so the message failed even though the limit would have
+cleared in nine seconds.
+
+* Retry hints are parsed from `Retry-After`, `retryDelay`, or prose ("try again in
+  9.1425s"). If the wait is ≤ `RATE_LIMIT_WAIT_CAP` (default 20s), Hermes sleeps and
+  retries that provider (max twice) instead of falling back or failing.
+* Longer hints fall back immediately and set the cooldown to the hinted value.
+* Token diet so a step fits the free TPM budget: `MAX_HISTORY_MESSAGES` 20 → 10,
+  `MAX_COMPLETION_TOKENS` 3000 → 1500, `MAX_OUTPUT_CHARS` 7000 → 4000.
+* When every provider is rate limited, the Discord message now explains why and what to
+  change, and still shows the raw provider error underneath.
+* Tests: 6 router, 8 parsing and 1 loop case added (299 total).
+* Docs: `docs/RATE_LIMITS.md`.
+
 ## 3.2.2 — 12 November 2026
 
 **Fixed: "empty message (finish_reason=stop)" from Groq, and daily-quota thrash on Gemini.**

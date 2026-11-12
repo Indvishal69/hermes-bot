@@ -152,16 +152,17 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `GEMINI_API_BASE` | *(empty)* | Only for a compatible proxy/endpoint |
 | `MAX_AGENT_STEPS` | `8` | Tool steps per task (1–25) |
 | `AI_TIMEOUT` | `150` | Seconds per model call |
-| `MAX_HISTORY_MESSAGES` | `20` | Conversation turns sent back to the model |
+| `MAX_HISTORY_MESSAGES` | `10` | Conversation turns sent back to the model |
 | `TEMPERATURE` | `0.2` | 0–2 |
-| `MAX_COMPLETION_TOKENS` | `3000` | Per response |
+| `MAX_COMPLETION_TOKENS` | `1500` | Per response (JSON actions are small) |
 | `PROVIDER_COOLDOWN` | `60` | Seconds a failing provider is deprioritised |
 | `QUOTA_COOLDOWN` | `3600` | Seconds a provider is deprioritised after a **daily** quota error |
+| `RATE_LIMIT_WAIT_CAP` | `20` | If a provider says "retry in Ns" and N is this small, wait instead of failing |
 | `TASK_RATE_LIMIT` | `3` | Minimum seconds between tasks |
 | `DATA_DIR` | `./data` | SQLite, backups, workspace |
 | `WORKSPACE_DIR` | `$DATA_DIR/workspace` | The only directory the agent may touch |
 | `MAX_FILE_BYTES` | `200000` | Per-file read/write limit |
-| `MAX_OUTPUT_CHARS` | `7000` | Command/file output sent to the model |
+| `MAX_OUTPUT_CHARS` | `4000` | Command/file output sent to the model |
 | `COMMAND_TIMEOUT` | `45` | Hard limit per command |
 | `APPROVAL_TTL` | `900` | Seconds before a pending approval expires |
 | `ALLOW_GIT_PUSH` | `false` | Keep false unless you want `git push` possible |
@@ -208,7 +209,7 @@ hermes/
   connectors/                pluggable services: base, registry, github, notion,
                              slack, platforms (render/vercel/cloudflare/hf)
   browsing/                  web fetch + SSRF guard, search, optional browser
-tests/                       286 pytest tests (no network, no credentials needed)
+tests/                       299 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
@@ -228,7 +229,8 @@ provider calls can only be verified with your own keys — use `!testai` for tha
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render (including what the free
 plan really does to a Discord bot), Railway, Fly.io and a plain VPS, and
 [docs/CONNECTORS.md](docs/CONNECTORS.md) for the connector system and
-[docs/BROWSER.md](docs/BROWSER.md) for web access.
+[docs/BROWSER.md](docs/BROWSER.md) for web access and
+[docs/RATE_LIMITS.md](docs/RATE_LIMITS.md) for free-tier limits and tuning.
 
 ## License / ownership
 

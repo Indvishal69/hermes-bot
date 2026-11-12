@@ -173,3 +173,65 @@ def test_per_minute_rate_limit_keeps_the_short_cooldown():
         router.complete([{"role": "user", "content": "hi"}])
     assert router.status()[0]["cooldown_seconds"] <= 60
     assert router.status()[0]["last_error"]["daily_quota"] is False
+
+
+def test_short_retry_hint_is_waited_for_instead_of_failing(monkeypatch):
+    waited: list[float] = []
+    monkeypatch.setattr("hermes.providers.router.time.sleep", lambda s: waited.append(s))
+
+    limited = ProviderError(
+        "groq",
+        "HTTP 429: Rate limit reached ... on tokens per minute (TPM): Limit 8000, "
+        "Used 7151, Requested 2068. Please try again in 9.1425s.",
+        kind="quota", status=429, retry_after=9.14,
+    )
+    groq = FakeProvider("groq", outcomes=[limited, "recovered after wait"])
+    gemini = FakeProvider("gemini", outcomes=["gemini answer"])
+    router = Router({"groq": groq, "gemini": gemini}, ["groq", "gemini"], wait_cap=20)
+
+    result = router.complete([{"role": "user", "content": "hi"}])
+    assert result.text == "recovered after wait"
+    assert result.provider == "groq"
+    assert waited and 9 <= waited[0] <= 10
+    assert gemini.calls == 0
+
+
+def test_long_retry_hint_falls_back_immediately(monkeypatch):
+    waited: list[float] = []
+    monkeypatch.setattr("hermes.providers.router.time.sleep", lambda s: waited.append(s))
+
+    limited = ProviderError("groq", "HTTP 429: rate limit", kind="quota", status=429,
+                            retry_after=120.0)
+    groq = FakeProvider("groq", outcomes=[limited])
+    gemini = FakeProvider("gemini", outcomes=["gemini answer"])
+    router = Router({"groq": groq, "gemini": gemini}, ["groq", "gemini"], wait_cap=20)
+
+    assert router.complete([{"role": "user", "content": "hi"}]).provider == "gemini"
+    assert waited == []                      # no pointless sleep
+    status = {row["provider"]: row for row in router.status()}
+    assert status["groq"]["cooldown_seconds"] >= 100
+
+
+def test_wait_cap_zero_disables_waiting(monkeypatch):
+    waited: list[float] = []
+    monkeypatch.setattr("hermes.providers.router.time.sleep", lambda s: waited.append(s))
+    limited = ProviderError("groq", "HTTP 429: slow down", kind="quota", status=429,
+                            retry_after=3.0)
+    groq = FakeProvider("groq", outcomes=[limited, "never reached"])
+    router = Router({"groq": groq}, ["groq"], wait_cap=0)
+    with pytest.raises(ProviderError):
+        router.complete([{"role": "user", "content": "hi"}])
+    assert waited == []
+
+
+def test_waiting_happens_at_most_twice_per_provider(monkeypatch):
+    waited: list[float] = []
+    monkeypatch.setattr("hermes.providers.router.time.sleep", lambda s: waited.append(s))
+    limited = ProviderError("groq", "HTTP 429: TPM limit", kind="quota", status=429,
+                            retry_after=2.0)
+    groq = FakeProvider("groq", outcomes=[limited, limited, limited, limited])
+    router = Router({"groq": groq}, ["groq"], wait_cap=20)
+    with pytest.raises(ProviderError):
+        router.complete([{"role": "user", "content": "hi"}])
+    assert len(waited) == 2
+    assert groq.calls == 3

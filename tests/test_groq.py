@@ -89,9 +89,10 @@ def test_default_groq_model_is_not_a_retired_id():
 
 # -- HTTP behaviour ---------------------------------------------------------
 class FakeResponse:
-    def __init__(self, status_code: int, payload):
+    def __init__(self, status_code: int, payload, headers=None):
         self.status_code = status_code
         self._payload = payload
+        self.headers = headers or {}
         self.text = payload if isinstance(payload, str) else json.dumps(payload)
 
     def json(self):
@@ -115,7 +116,7 @@ class FakeSession:
     def post(self, url, headers=None, json=None, timeout=None):
         self.post_calls.append(json)
         outcome = self.posts.pop(0) if self.posts else (200, {"choices": [{"message": {"content": "ok"}}]})
-        return FakeResponse(*outcome)
+        return FakeResponse(*outcome) if isinstance(outcome, tuple) else outcome
 
 
 def make_provider(session, model="openai/gpt-oss-120b"):

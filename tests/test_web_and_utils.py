@@ -113,3 +113,22 @@ def test_human_helpers():
     assert mask("") == "missing"
     assert mask("short") == "configured"
     assert mask("a" * 12).endswith("aaaa)")
+
+
+@pytest.mark.parametrize(
+    "text,headers,expected",
+    [
+        ("Please try again in 9.1425s. Need more tokens?", None, 9.14),
+        ('{"retryDelay": "31s"}', None, 31.0),
+        ("retry in 4s", None, 4.0),
+        (None, {"Retry-After": "12"}, 12.0),
+        (None, {"retry-after": "0.5"}, 0.5),
+        ("no hint at all", None, None),
+        ("", None, None),
+        (None, None, None),
+    ],
+)
+def test_parse_retry_after(text, headers, expected):
+    from hermes.utils import parse_retry_after
+
+    assert parse_retry_after(text, headers) == expected
