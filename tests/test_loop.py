@@ -209,3 +209,97 @@ def test_memory_note_tool_persists(settings):
     loop, _, db, _ = build(settings, router)
     run(loop.handle(user_id=1, channel_id=2, prompt="remember", notify=run(collect([])), project="demo"))
     assert db.notes("demo")[0]["note"] == "Project uses Flask"
+
+
+# --------------------------------------------------------------------------
+# connectors inside the agent loop
+# --------------------------------------------------------------------------
+from hermes.connectors.base import Connector, ConnectorError, ConnectorTool  # noqa: E402
+from hermes.connectors.registry import ConnectorRegistry  # noqa: E402
+
+
+class EchoConnector(Connector):
+    name = "echo"
+    title = "Echo"
+    env_vars = ("ECHO_TOKEN",)
+
+    def tools(self):
+        return [
+            ConnectorTool("echo_ping", "Ping", {}, self.ping),
+            ConnectorTool("echo_write", "Write", {"text": "str"}, self.write, write=True),
+        ]
+
+    def ping(self) -> str:
+        return "pong"
+
+    def write(self, text: str = "") -> str:
+        return f"wrote {text}"
+
+
+def build_with_connectors(settings, router):
+    workspace = Workspace(settings.workspace_dir, max_file_bytes=100_000)
+    db = Database(settings.db_path)
+    db.init()
+    registry = ConnectorRegistry(db, env={"ECHO_TOKEN": "t"}, classes=(EchoConnector,))
+    runner = CommandRunner(workspace.root, timeout=10)
+    toolbox = ToolBox(workspace, runner, db, connectors=registry)
+    approvals = ApprovalStore(ttl=60)
+    loop = AgentLoop(settings, db, router, workspace, runner, toolbox, approvals)
+    return loop, registry, db, approvals
+
+
+def test_connector_read_tool_runs_without_approval(settings):
+    router = ScriptedRouter([
+        action(action="echo_ping"),
+        action(action="final", message="pinged"),
+    ])
+    loop, _, _, approvals = build_with_connectors(settings, router)
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="ping it", notify=run(collect([]))))
+    assert result.status == "completed"
+    assert not approvals.pending_for(1)
+    assert "pong" in router.seen[-1][-1]["content"]
+
+
+def test_connector_write_requires_owner_approval(settings):
+    router = ScriptedRouter([
+        action(action="echo_write", text="note", reason="save a note"),
+        action(action="final", message="saved"),
+    ])
+    loop, registry, db, approvals = build_with_connectors(settings, router)
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="save", notify=run(collect([]))))
+    assert result.status == "awaiting_approval"
+    assert result.approval.kind == "connector"
+    assert result.approval.tool == "echo_write"
+    assert result.approval.args == {"text": "note"}
+    assert "echo_write(text=note)" in result.approval.command
+
+    # Nothing was written before approval.
+    assert db.audit_tail(1)[0]["action"] == "connector_requested"
+
+    resumed = run(loop.resume(result.approval, command_result="wrote note",
+                              notify=run(collect([])), approved=True))
+    assert resumed.status == "completed"
+    assert "OWNER APPROVED" in router.seen[-1][-1]["content"]
+
+
+def test_disabled_connector_tools_are_not_offered(settings):
+    router = ScriptedRouter([
+        action(action="echo_ping"),
+        action(action="final", message="cannot ping"),
+    ])
+    loop, registry, _, _ = build_with_connectors(settings, router)
+    registry.disable("echo")
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="ping", notify=run(collect([]))))
+    assert result.status == "completed"
+    assert "Unknown action" in router.seen[-1][-1]["content"]
+    assert "echo_ping" not in loop.system_prompt()
+
+
+def test_prompt_lists_active_connector_tools(settings):
+    router = ScriptedRouter([action(action="final", message="ok")])
+    loop, _, _, _ = build_with_connectors(settings, router)
+    prompt = loop.system_prompt()
+    assert "echo_ping" in prompt
+    assert "echo_write" in prompt
+    assert "OWNER APPROVAL REQUIRED" in prompt
+    assert "echo" in prompt.lower()

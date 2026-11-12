@@ -38,7 +38,8 @@ def test_health_endpoint_reports_ok(settings):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["ok"] is True
-    assert payload["version"].startswith("3.0")
+    assert payload["version"].startswith("3.")
+    assert payload["connectors_active"] == 0
     assert payload["providers_configured"] == ["groq"]
 
 

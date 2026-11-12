@@ -15,10 +15,11 @@ def test_migrating_an_existing_v1_database_upgrades_it(tmp_path):
     path = tmp_path / "old.sqlite3"
     database = Database(path)
     database.init()
-    # Simulate a database created before migration 2 existed.
+    # Simulate a database created when only migration 1 existed.
     with database.connect() as conn:
         conn.execute("DROP TABLE IF EXISTS project_memory")
-        conn.execute("DELETE FROM schema_migrations WHERE version = 2")
+        conn.execute("DROP TABLE IF EXISTS connectors")
+        conn.execute("DELETE FROM schema_migrations WHERE version > 1")
     assert database.schema_version() == 1
     upgraded = Database(path)
     assert upgraded.init() == SCHEMA_VERSION

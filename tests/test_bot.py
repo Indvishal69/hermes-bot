@@ -89,12 +89,12 @@ class FakeAgentLoop:
         return self.run
 
 
-def make_bot(settings, agent_loop=None):
+def make_bot(settings, agent_loop=None, connectors=None):
     db = Database(settings.db_path)
     db.init()
     workspace = Workspace(settings.workspace_dir)
     runner = CommandRunner(workspace.root, timeout=5)
-    toolbox = ToolBox(workspace, runner, db)
+    toolbox = ToolBox(workspace, runner, db, connectors=connectors)
     return HermesBot(
         settings,
         db,
@@ -105,6 +105,7 @@ def make_bot(settings, agent_loop=None):
         agent_loop or FakeAgentLoop(),
         ApprovalStore(ttl=60),
         started_at=time.time(),
+        connectors=connectors,
     )
 
 
@@ -330,3 +331,190 @@ def test_startup_resolves_provider_models(settings):
     good, bad = asyncio.run(scenario())
     assert good.resolved == 1
     assert bad.resolved == 1  # a failing provider must not stop startup
+
+
+# --------------------------------------------------------------------------
+# connectors
+# --------------------------------------------------------------------------
+from hermes.connectors.base import Connector, ConnectorError, ConnectorTool  # noqa: E402
+from hermes.connectors.registry import ConnectorRegistry  # noqa: E402
+
+
+class EchoConnector(Connector):
+    name = "echo"
+    title = "Echo"
+    description = "Test connector"
+    env_vars = ("ECHO_TOKEN",)
+    settings_schema = {"default_target": "where to write"}
+
+    def tools(self):
+        return [
+            ConnectorTool("echo_ping", "Ping", {}, self.ping),
+            ConnectorTool("echo_write", "Write", {"text": "str"}, self.write, write=True),
+        ]
+
+    def ping(self) -> str:
+        return "pong"
+
+    def write(self, text: str = "") -> str:
+        if not text:
+            raise ConnectorError("echo_write needs text")
+        return f"wrote {text}"
+
+    def check(self) -> str:
+        return "echo ok"
+
+
+def make_registry(db, *, token="t"):
+    return ConnectorRegistry(db, env={"ECHO_TOKEN": token}, classes=(EchoConnector,))
+
+
+def test_connectors_command_lists_state(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connectors"))
+        return channel
+
+    text = asyncio.run(scenario()).sent[0]
+    assert "Connectors" in text
+    assert "echo" in text and "connected" in text
+    assert "!connect github" in text
+
+
+def test_connectors_command_shows_missing_credentials(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db, token="")
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connectors"))
+        return channel
+
+    text = asyncio.run(scenario()).sent[0]
+    assert "ECHO_TOKEN" in text
+
+
+def test_connect_and_disconnect_persist(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!disconnect echo"))
+        disabled_state = db.connector_state("echo")
+        await bot.on_message(FakeMessage(channel, "!connectors"))
+        after_disable = channel.sent[-1]
+        await bot.on_message(FakeMessage(channel, "!connect echo"))
+        return db, channel, after_disable, disabled_state
+
+    db, channel, after_disable, disabled_state = asyncio.run(scenario())
+    assert "disconnected" in after_disable
+    assert disabled_state["enabled"] is False
+    assert db.connector_state("echo")["enabled"] is True
+
+
+def test_connect_without_credentials_explains_what_is_missing(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db, token="")
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connect echo"))
+        return channel
+
+    text = asyncio.run(scenario()).sent[0]
+    assert "ECHO_TOKEN" in text
+
+
+def test_connector_detail_and_settings(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connector echo"))
+        detail = channel.sent[0]
+        await bot.on_message(FakeMessage(channel, "!connector echo set default_target=#general"))
+        return db, detail, channel.sent[-1]
+
+    db, detail, confirmation = asyncio.run(scenario())
+    assert "echo_write" in detail and "needs approval" in detail
+    assert "ECHO_TOKEN" in detail
+    assert "default_target" in confirmation
+    assert db.connector_state("echo")["settings"] == {"default_target": "#general"}
+
+
+def test_connector_live_check(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connector echo test"))
+        return channel
+
+    channel = asyncio.run(scenario())
+    assert "echo ok" in channel.messages[0].edits[-1]
+
+
+def test_unknown_connector_name_is_reported(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        bot = make_bot(settings, connectors=make_registry(db))
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!connect github"))
+        return channel
+
+    text = asyncio.run(scenario()).sent[0]
+    assert "Unknown connector" in text
+
+
+def test_approving_a_connector_action_runs_it(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        loop = FakeAgentLoop()
+        bot = make_bot(settings, loop, connectors=registry)
+        approval = bot.approvals.add(
+            user_id=123456789012345678,
+            channel_id=555,
+            command="echo_write(text=hi)",
+            reason="save a note",
+            messages=[],
+            task_id=1,
+            steps=1,
+            kind="connector",
+            tool="echo_write",
+            args={"text": "hi"},
+        )
+        channel = FakeChannel()
+        await bot._cmd_approval(FakeMessage(channel, "!approve x"), "!approve", approval.id)
+        return loop, channel, db
+
+    loop, channel, db = asyncio.run(scenario())
+    assert any("wrote hi" in text for text in channel.sent)
+    assert loop.resumes and loop.resumes[0]["approved"] is True
+    assert db.audit_tail(1)[0]["action"] == "connector_executed"
+
+
+def test_denying_a_connector_action_runs_nothing(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        loop = FakeAgentLoop()
+        bot = make_bot(settings, loop, connectors=registry)
+        approval = bot.approvals.add(
+            user_id=123456789012345678, channel_id=555,
+            command="echo_write(text=hi)", reason="save", messages=[], task_id=1, steps=1,
+            kind="connector", tool="echo_write", args={"text": "hi"},
+        )
+        channel = FakeChannel()
+        await bot._cmd_approval(FakeMessage(channel, "!deny x"), "!deny", approval.id)
+        return loop, channel
+
+    loop, channel = asyncio.run(scenario())
+    assert loop.resumes and loop.resumes[0]["approved"] is False
+    assert not any("wrote hi" in text for text in channel.sent)
