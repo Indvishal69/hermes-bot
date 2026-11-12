@@ -54,3 +54,15 @@ def db(settings):
     database = Database(settings.db_path)
     database.init()
     return database
+
+
+@pytest.fixture()
+def public_dns(monkeypatch):
+    """Deterministic DNS so URL validation can be tested without the network."""
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    return fake_getaddrinfo

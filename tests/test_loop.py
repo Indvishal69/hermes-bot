@@ -303,3 +303,79 @@ def test_prompt_lists_active_connector_tools(settings):
     assert "echo_write" in prompt
     assert "OWNER APPROVAL REQUIRED" in prompt
     assert "echo" in prompt.lower()
+
+
+# --------------------------------------------------------------------------
+# web tools inside the agent loop
+# --------------------------------------------------------------------------
+class _Page:
+    status_code = 200
+    headers = {"Content-Type": "text/html; charset=utf-8"}
+    encoding = "utf-8"
+    _body = b"<html><title>Docs</title><body>Hermes reads this page.</body></html>"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_content(self, chunk_size=1024):
+        yield self._body
+
+
+class _Session:
+    def get(self, url, **kwargs):
+        return _Page()
+
+    def post(self, url, **kwargs):  # pragma: no cover - unused
+        return _Page()
+
+
+def build_with_web(settings, router):
+    from hermes.browsing import WebTools
+    from hermes.browsing.fetch import HttpFetcher
+
+    workspace = Workspace(settings.workspace_dir, max_file_bytes=100_000)
+    db = Database(settings.db_path)
+    db.init()
+    web = WebTools(settings)
+    web.fetcher = HttpFetcher(session=_Session())
+    runner = CommandRunner(workspace.root, timeout=10)
+    toolbox = ToolBox(workspace, runner, db, webtools=web)
+    loop = AgentLoop(settings, db, router, workspace, runner, toolbox, ApprovalStore(ttl=60))
+    return loop, toolbox
+
+
+def test_web_fetch_is_offered_and_runs(settings, public_dns):
+    router = ScriptedRouter([
+        action(action="web_fetch", url="https://example.com/docs"),
+        action(action="final", message="Read the page."),
+    ])
+    loop, _ = build_with_web(settings, router)
+    assert "web_fetch" in loop.system_prompt()
+
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="read docs", notify=run(collect([]))))
+    assert result.status == "completed"
+    fed_back = router.seen[-1][-1]["content"]
+    assert "Hermes reads this page." in fed_back
+    assert "untrusted data" in fed_back.lower()
+
+
+def test_web_tools_absent_when_disabled(make_settings):
+    router = ScriptedRouter([action(action="final", message="ok")])
+    disabled = make_settings(env={"WEB_ENABLED": "false"})
+    loop, toolbox = build_with_web(disabled, router)
+    assert "web_fetch" not in loop.system_prompt()
+    assert "web_fetch" not in toolbox.specs()
+
+
+def test_web_fetch_rejects_private_hosts_inside_the_loop(settings, public_dns):
+    router = ScriptedRouter([
+        action(action="web_fetch", url="http://169.254.169.254/latest/meta-data/"),
+        action(action="final", message="Blocked."),
+    ])
+    loop, _ = build_with_web(settings, router)
+    result = run(loop.handle(user_id=1, channel_id=2, prompt="fetch metadata", notify=run(collect([]))))
+    assert result.status == "completed"
+    assert "non-public" in router.seen[-1][-1]["content"]
