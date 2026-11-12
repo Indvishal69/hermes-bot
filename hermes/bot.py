@@ -13,6 +13,7 @@ import discord
 
 from . import APP_NAME, __version__
 from .config import Settings
+from .connectors import ConnectorError, ConnectorRegistry
 from .core import AgentLoop, AgentRun, ApprovalStore, PendingApproval
 from .db import Database
 from .providers import ProviderError, Router
@@ -35,7 +36,10 @@ HELP_TEXT = """**{app} — commands**
 `!approve ID` / `!deny ID` — approve or reject a pending command
 `!backup` — snapshot the SQLite database
 `!testai` — test each provider independently and show real errors
-`!integrations` — which integrations have credentials
+`!connectors` — list connectors (connected / configured / missing)
+`!connect NAME` / `!disconnect NAME` — enable or disable a connector (saved)
+`!connector NAME` — detail; `!connector NAME test` — live check;
+`!connector NAME set key=value` — save a non-secret setting
 `!restart` — restart the bot process
 
 Send any other message to give Hermes a task."""
@@ -86,6 +90,7 @@ class HermesBot(discord.Client):
         approvals: ApprovalStore,
         *,
         started_at: float,
+        connectors: ConnectorRegistry | None = None,
     ):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -102,6 +107,7 @@ class HermesBot(discord.Client):
         # ``_UnixSelectorEventLoop.handle`` -> AttributeError on every message.
         self.agent_loop = loop
         self.approvals = approvals
+        self.connectors = connectors
         self.started_at = started_at
         self._task_lock = asyncio.Lock()
         self._last_task: dict[int, float] = {}
@@ -229,8 +235,14 @@ class HermesBot(discord.Client):
         if command == "!testai":
             await self._cmd_testai(message)
             return True
-        if command == "!integrations":
-            await self._send(message.channel, self._integrations_text())
+        if command in ("!connectors", "!integrations"):
+            await self._send(message.channel, self._connectors_text())
+            return True
+        if command in ("!connect", "!disconnect"):
+            await self._cmd_connect(message, command, arg)
+            return True
+        if command == "!connector":
+            await self._cmd_connector(message, arg)
             return True
         if command == "!restart":
             await message.channel.send("♻️ Restarting the Hermes process now.")
@@ -269,6 +281,8 @@ class HermesBot(discord.Client):
             f"**Status** — uptime {self.uptime}",
             f"Tasks run this session: {self._tasks_run}",
             f"Tasks stored: {stats['tasks']} | messages: {stats['messages']} | notes: {stats['notes']}",
+            f"Connectors connected: {self.connectors.active_count() if self.connectors else 0}"
+            f" / {len(self.connectors.names()) if self.connectors else 0}",
             f"Pending approvals: {len(pending)}"
             + (f" ({', '.join(item.id for item in pending)})" if pending else ""),
             f"Preferred provider: `{self.settings.active_provider}`",
@@ -413,22 +427,128 @@ class HermesBot(discord.Client):
                 lines.append(f"❌ {name}: {type(exc).__name__}: {self._clean(exc)}")
         await status.edit(content=truncate(self._clean("\n".join(lines)), 1_900))
 
-    def _integrations_text(self) -> str:
-        rows = [
-            ("GitHub", self.settings.github_token),
-            ("Render", self.settings.render_api_key),
-            ("Vercel", self.settings.vercel_token),
-            ("Cloudflare", self.settings.cloudflare_api_token),
-            ("Hugging Face", self.settings.huggingface_token),
-        ]
-        lines = ["**Integrations** (credentials via environment variables)"]
-        for name, token in rows:
-            lines.append(f"• {name}: {'configured' if token else 'not configured'}")
+    def _connectors_text(self) -> str:
+        if self.connectors is None:
+            return "Connector registry is not initialised."
+        rows = self.connectors.status()
+        active = [row for row in rows if row["enabled"]]
+        lines = [f"**Connectors** — {len(active)}/{len(rows)} connected"]
+        for row in rows:
+            if row["enabled"]:
+                state = f"connected ({row['tool_count']} tools)"
+            elif not row["configured"]:
+                state = f"not configured — needs {', '.join(row['missing_env']) or 'env vars'}"
+            else:
+                state = "configured but disconnected"
+            settings = ", ".join(f"{k}={v}" for k, v in row["settings"].items())
+            lines.append(f"• **{row['name']}** — {state}" + (f" [{settings}]" if settings else ""))
         lines.append(
-            "Integration modules live in `hermes/integrations/`. They are never called "
-            "automatically — each call is explicit and audited."
+            "Connect with `!connect github`, disconnect with `!disconnect github`. "
+            "State is saved in the database; credentials stay in environment variables."
         )
         return "\n".join(lines)
+
+    async def _cmd_connect(self, message: discord.Message, command: str, arg: str) -> None:
+        if self.connectors is None:
+            await message.channel.send("Connector registry is not initialised.")
+            return
+        name = (arg or "").strip().lower()
+        if not name:
+            await message.channel.send(
+                f"Usage: `{command} <name>`. Available: {', '.join(self.connectors.names())}"
+            )
+            return
+        try:
+            if command == "!connect":
+                text = await asyncio.to_thread(self.connectors.enable, name)
+            else:
+                text = await asyncio.to_thread(self.connectors.disable, name)
+        except ConnectorError as exc:
+            await message.channel.send(f"❌ {exc}")
+            return
+        self.db.audit(message.author.id, f"connector:{command[1:]}", name, ok=True)
+        await message.channel.send(f"✅ {text}")
+
+    async def _cmd_connector(self, message: discord.Message, arg: str) -> None:
+        if self.connectors is None:
+            await message.channel.send("Connector registry is not initialised.")
+            return
+        parts = (arg or "").split(maxsplit=1)
+        if not parts or not parts[0]:
+            await message.channel.send(
+                "Usage: `!connector <name> [test]` or `!connector <name> set key=value`. "
+                f"Available: {', '.join(self.connectors.names())}"
+            )
+            return
+        name = parts[0].strip().lower()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        connector = self.connectors.get(name)
+        if connector is None:
+            await message.channel.send(
+                f"Unknown connector `{name}`. Available: {', '.join(self.connectors.names())}"
+            )
+            return
+
+        if rest.startswith("set "):
+            assignment = rest[4:].strip()
+            if "=" not in assignment:
+                await message.channel.send("Usage: `!connector <name> set key=value`")
+                return
+            key, value = assignment.split("=", 1)
+            try:
+                text = await asyncio.to_thread(
+                    self.connectors.set_setting, name, key.strip(), value.strip()
+                )
+            except ConnectorError as exc:
+                await message.channel.send(f"❌ {exc}")
+                return
+            self.db.audit(message.author.id, "connector:setting", f"{name} {key.strip()}", ok=True)
+            await message.channel.send(f"💾 {text}")
+            return
+
+        if rest == "test":
+            status = await message.channel.send(f"🔌 Testing {connector.title}…")
+            try:
+                text = await asyncio.wait_for(
+                    asyncio.to_thread(connector.check), timeout=45
+                )
+                await status.edit(content=self._clean(f"✅ {connector.title}: {text}"))
+            except ConnectorError as exc:
+                await status.edit(content=self._clean(f"❌ {connector.title}: {exc}"))
+            except asyncio.TimeoutError:
+                await status.edit(content=f"❌ {connector.title}: check timed out after 45s")
+            except Exception as exc:  # noqa: BLE001
+                await status.edit(
+                    content=self._clean(f"❌ {connector.title}: {type(exc).__name__}: {exc}")
+                )
+            return
+
+        info = connector.status()
+        state = (
+            "connected" if self.connectors.is_active(name)
+            else ("configured but disconnected" if info["configured"] else "not configured")
+        )
+        lines = [
+            f"**{info['title']}** — {state}",
+            info["description"],
+            "Credentials (environment variables): "
+            + ", ".join(f"`{key}`" for key in info["env_vars"]),
+        ]
+        if info["missing_env"]:
+            lines.append("Missing: " + ", ".join(f"`{key}`" for key in info["missing_env"]))
+        if info["settings_schema"]:
+            saved = ", ".join(f"{k}={v}" for k, v in info["settings"].items()) or "none"
+            lines.append(f"Settings: {saved}")
+            for key, help_text in info["settings_schema"].items():
+                lines.append(f"  `{key}` — {help_text}")
+        if info["tools"]:
+            lines.append("Tools:")
+            for tool in info["tools"]:
+                marker = " (write, needs approval)" if tool["write"] else ""
+                lines.append(f"  `{tool['name']}`{marker} — {tool['description']}")
+        if info["docs_url"]:
+            lines.append(info["docs_url"])
+        await self._send(message.channel, "\n".join(lines))
 
     # -- approvals ----------------------------------------------------------
     async def _cmd_approval(self, message: discord.Message, command: str, arg: str) -> None:
@@ -453,6 +573,10 @@ class HermesBot(discord.Client):
                 await self._send(message.channel, run.text)
             return
 
+        if approval.kind == "connector":
+            await self._run_approved_connector(message, approval)
+            return
+
         await message.channel.send(f"▶️ Running approved command: `{approval.command[:300]}`")
         result = await asyncio.to_thread(self.runner.run, approval.command)
         self.db.audit(
@@ -470,6 +594,44 @@ class HermesBot(discord.Client):
         run = await self.agent_loop.resume(
             approval,
             command_result=result.summary(),
+            notify=self._notify(status),
+            approved=True,
+        )
+        await self._deliver(message.channel, run, status)
+
+    async def _run_approved_connector(self, message: discord.Message, approval) -> None:
+        """Run an owner-approved connector write, then let the agent continue."""
+        if self.connectors is None:
+            await message.channel.send("Connector registry is not initialised.")
+            return
+        await message.channel.send(f"▶️ Running approved connector action: `{approval.command[:300]}`")
+        try:
+            result_text = await asyncio.wait_for(
+                asyncio.to_thread(self.connectors.call, approval.tool, approval.args),
+                timeout=60,
+            )
+            ok = True
+        except ConnectorError as exc:
+            result_text, ok = f"failed: {exc}", False
+        except asyncio.TimeoutError:
+            result_text, ok = "failed: connector call timed out after 60s", False
+        except Exception as exc:  # noqa: BLE001
+            result_text, ok = f"failed: {type(exc).__name__}: {exc}", False
+
+        self.db.audit(
+            message.author.id,
+            "connector_executed",
+            f"{approval.tool} -> {truncate(result_text, 400)}",
+            ok=ok,
+        )
+        await self._send(
+            message.channel,
+            f"**Connector result** ({approval.tool})\n```text\n{truncate(result_text, 1_400)}\n```",
+        )
+        status = StatusMessage(await message.channel.send("🧠 Continuing after the connector action…"))
+        run = await self.agent_loop.resume(
+            approval,
+            command_result=result_text,
             notify=self._notify(status),
             approved=True,
         )

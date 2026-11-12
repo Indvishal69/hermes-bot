@@ -22,6 +22,7 @@ def create_app(
     workspace=None,
     started_at: float | None = None,
     status_hook: Callable[[], dict[str, Any]] | None = None,
+    connectors=None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["JSON_SORT_KEYS"] = False
@@ -44,6 +45,7 @@ def create_app(
             "database": db_ok,
             "workspace_writable": ws_ok,
             "providers_configured": configured,
+            "connectors_active": connectors.active_count() if connectors is not None else 0,
         }
         return jsonify(payload), (200 if payload["ok"] else 503)
 

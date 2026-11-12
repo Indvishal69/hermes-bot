@@ -25,6 +25,7 @@ from pathlib import Path
 from hermes import APP_NAME, __version__
 from hermes.bot import HermesBot
 from hermes.config import ensure_storage, load_settings
+from hermes.connectors import ConnectorRegistry
 from hermes.core import AgentLoop, ApprovalStore
 from hermes.db import Database
 from hermes.providers import build_router
@@ -78,6 +79,18 @@ def preflight(settings, *, verbose: bool = True) -> tuple[bool, list[str]]:
     for name, present in settings.providers_configured.items():
         notes.append(f"provider {name}: {'configured' if present else 'not configured'}")
 
+    try:
+        from hermes.connectors import ConnectorRegistry
+
+        registry = ConnectorRegistry(db)
+        configured = [row["name"] for row in registry.status() if row["configured"]]
+        notes.append(
+            f"connectors: {registry.active_count()} active of {len(registry.names())}"
+            + (f" (configured: {', '.join(configured)})" if configured else "")
+        )
+    except Exception as exc:  # noqa: BLE001 - preflight must not fail on this
+        notes.append(f"connectors: could not be inspected ({type(exc).__name__})")
+
     if verbose:
         for line in notes:
             print(f"  {line}")
@@ -103,24 +116,34 @@ def build_runtime(settings):
         max_output_chars=settings.max_output_chars,
         allow_git_push=settings.allow_git_push,
     )
+    connectors = ConnectorRegistry(
+        db, secrets=settings.secrets, max_chars=settings.max_output_chars
+    )
     toolbox = ToolBox(
-        workspace, runner, db, max_output_chars=settings.max_output_chars
+        workspace,
+        runner,
+        db,
+        max_output_chars=settings.max_output_chars,
+        connectors=connectors,
     )
     router = build_router(settings)
     approvals = ApprovalStore(ttl=settings.approval_ttl)
     loop = AgentLoop(
         settings, db, router, workspace, runner, toolbox, approvals, app_name=APP_NAME
     )
-    return db, workspace, runner, toolbox, router, approvals, loop
+    return db, workspace, runner, toolbox, router, approvals, loop, connectors
 
 
-def start_health_server(settings, db, workspace, router, started_at: float) -> threading.Thread:
+def start_health_server(
+    settings, db, workspace, router, started_at: float, connectors=None
+) -> threading.Thread:
     def status_hook():
         stats = db.stats()
         return {
             "database_schema": stats["schema_version"],
             "workspace_files": workspace.info()["files"],
             "providers": [row["provider"] for row in router.status() if row["configured"]],
+            "connectors_active": connectors.active_count() if connectors else 0,
         }
 
     app = create_app(
@@ -130,6 +153,7 @@ def start_health_server(settings, db, workspace, router, started_at: float) -> t
         workspace=workspace,
         started_at=started_at,
         status_hook=status_hook,
+        connectors=connectors,
     )
 
     def serve() -> None:
@@ -186,12 +210,17 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Settings: %s", settings.redacted_summary())
 
     try:
-        db, workspace, runner, toolbox, router, approvals, loop = build_runtime(settings)
+        db, workspace, runner, toolbox, router, approvals, loop, connectors = build_runtime(settings)
     except Exception as exc:  # noqa: BLE001
         log.exception("Startup failed while initialising runtime: %s", exc)
         return 1
 
-    start_health_server(settings, db, workspace, router, started_at)
+    log.info(
+        "Connectors: %s active of %s",
+        connectors.active_count(),
+        len(connectors.names()),
+    )
+    start_health_server(settings, db, workspace, router, started_at, connectors)
 
     bot = HermesBot(
         settings,
@@ -203,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         loop,
         approvals,
         started_at=started_at,
+        connectors=connectors,
     )
 
     def shutdown(signum, _frame):
