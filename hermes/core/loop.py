@@ -34,12 +34,15 @@ class PendingApproval:
     id: str
     user_id: int
     channel_id: int
-    command: str
+    command: str  # human-readable summary of what will run
     reason: str
     messages: list[dict[str, str]]
     task_id: int
     created: float = field(default_factory=time.time)
     steps: int = 0
+    kind: str = "command"  # "command" (shell) or "connector" (external service write)
+    tool: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
 
     def expired(self, ttl: int) -> bool:
         return (time.time() - self.created) > ttl
@@ -103,6 +106,9 @@ OWNER: the only person who can talk to you (Discord ID {owner_id}). Everything y
 WORKSPACE (the only files you may read or write; paths are relative to it):
 {workspace_listing}
 
+CONNECTED SERVICES (connector tools available to you right now):
+{connectors}
+
 {tools}
 
 HARD RULES — never break these:
@@ -116,6 +122,8 @@ HARD RULES — never break these:
 8. When the task is done — or you are blocked — reply with the "final" action and a concise, accurate report.
 9. Keep files small and focused. Prefer replace_in_file over rewriting a whole file when editing.
 10. Python syntax can be checked with check_python before claiming code is valid.
+11. Connector tools read or change data in external services. Only call them when the task needs it,
+    never paste secrets into them, and expect the owner to approve any write action.
 
 Current UTC time: {now}
 {notes}"""
@@ -158,11 +166,21 @@ class AgentLoop:
             notes = "\nPROJECT MEMORY (notes you saved earlier):\n" + "\n".join(
                 f"- {row['note'][:300]}" for row in rows
             )
+        connector_specs = self.toolbox.connector_specs()
+        if connector_specs:
+            services = sorted({
+                name.split("_", 1)[0] for name in connector_specs
+            })
+            connectors = ", ".join(services) + f" ({len(connector_specs)} tools)"
+        else:
+            connectors = "none connected (the owner can connect one with !connect <name>)"
+
         return SYSTEM_TEMPLATE.format(
             app=self.app_name,
             owner_id=self.settings.allowed_user_id,
             workspace_listing=truncate(listing, 2_500),
-            tools=tool_prompt_block(),
+            connectors=connectors,
+            tools=tool_prompt_block(connector_specs),
             now=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
             notes=notes,
         )
@@ -238,9 +256,9 @@ class AgentLoop:
     ) -> AgentRun:
         """Continue a task after the owner approved or denied a command."""
         verdict = (
-            f"OWNER APPROVED the command. It ran with this result:\n{command_result}"
+            f"OWNER APPROVED the action. It ran with this result:\n{command_result}"
             if approved
-            else "OWNER DENIED the command. It did not run. Choose a different approach "
+            else "OWNER DENIED the action. Nothing ran. Choose a different approach "
             "or finish and explain what is blocked."
         )
         messages = list(approval.messages)
@@ -344,30 +362,43 @@ class AgentLoop:
 
             if tool_result.requires_approval:
                 payload = tool_result.approval or {}
-                command = payload.get("command", "")
-                allowed, reason = self.runner.is_allowed(command)
-                if not allowed:
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": f"TOOL RESULT: command rejected by policy — {reason}. "
-                            "Choose another approach or finish.",
-                        }
-                    )
-                    await notify("status", f"step {step}: blocked command")
-                    continue
+                kind = str(payload.get("kind", "command"))
+                tool_name = ""
+                tool_args: dict[str, Any] = {}
+
+                if kind == "command":
+                    summary = str(payload.get("command", ""))
+                    allowed, reason = self.runner.is_allowed(summary)
+                    if not allowed:
+                        messages.append({"role": "assistant", "content": raw})
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"TOOL RESULT: command rejected by policy — {reason}. "
+                                "Choose another approach or finish.",
+                            }
+                        )
+                        await notify("status", f"step {step}: blocked command")
+                        continue
+                else:
+                    summary = str(payload.get("summary") or payload.get("tool") or "connector action")
+                    tool_name = str(payload.get("tool", ""))
+                    tool_args = dict(payload.get("args") or {})
+
                 messages.append({"role": "assistant", "content": raw})
                 approval = self.approvals.add(
                     user_id=user_id,
                     channel_id=channel_id,
-                    command=command,
-                    reason=payload.get("reason", ""),
+                    command=summary,
+                    reason=str(payload.get("reason", "")),
                     messages=list(messages),
                     task_id=task_id,
                     steps=step,
+                    kind=kind,
+                    tool=tool_name,
+                    args=tool_args,
                 )
-                self.db.audit(user_id, "command_requested", command, ok=True)
+                self.db.audit(user_id, f"{kind}_requested", summary, ok=True)
                 return AgentRun(
                     text="Waiting for owner approval.",
                     status="awaiting_approval",

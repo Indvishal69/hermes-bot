@@ -64,6 +64,19 @@ MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        3,
+        (
+            """
+            CREATE TABLE IF NOT EXISTS connectors (
+                name TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                settings TEXT NOT NULL DEFAULT '{}',
+                updated_at REAL NOT NULL
+            )
+            """,
+        ),
+    ),
+    (
         2,
         (
             """
@@ -269,6 +282,69 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    # -- connectors ---------------------------------------------------------
+    def connector_state(self, name: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT name, enabled, settings FROM connectors WHERE name=?", (str(name),)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            settings = json.loads(row["settings"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            settings = {}
+        return {
+            "name": row["name"],
+            "enabled": bool(row["enabled"]),
+            "settings": settings if isinstance(settings, dict) else {},
+        }
+
+    def all_connectors(self) -> dict[str, dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT name, enabled, settings FROM connectors"
+            ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                settings = json.loads(row["settings"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                settings = {}
+            out[row["name"]] = {
+                "enabled": bool(row["enabled"]),
+                "settings": settings if isinstance(settings, dict) else {},
+            }
+        return out
+
+    def save_connector(
+        self,
+        name: str,
+        *,
+        enabled: bool | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist connector state. Credentials are never stored here."""
+        name = str(name)
+        now = time.time()
+        payload = None if settings is None else json.dumps(settings, sort_keys=True)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO connectors(name, enabled, settings, updated_at) "
+                "VALUES(?,?,?,?) ON CONFLICT(name) DO NOTHING",
+                (name, 1 if enabled is None else (1 if enabled else 0), payload or "{}", now),
+            )
+            if enabled is not None:
+                conn.execute(
+                    "UPDATE connectors SET enabled=?, updated_at=? WHERE name=?",
+                    (1 if enabled else 0, now, name),
+                )
+            if payload is not None:
+                conn.execute(
+                    "UPDATE connectors SET settings=?, updated_at=? WHERE name=?",
+                    (payload, now, name),
+                )
+
     # -- kv cache -----------------------------------------------------------
     def kv_set(self, key: str, value: Any) -> None:
         payload = value if isinstance(value, str) else json.dumps(value)
@@ -303,6 +379,7 @@ class Database:
             messages = count("chat_memory")
             tasks = count("tasks")
             notes = count("project_memory")
+            connectors = count("connectors")
             audits = count("audit_log")
         size = self.path.stat().st_size if self.path.exists() else 0
         return {
@@ -311,6 +388,7 @@ class Database:
             "messages": messages,
             "tasks": tasks,
             "notes": notes,
+            "connectors": connectors,
             "audit_rows": audits,
             "size_bytes": size,
         }

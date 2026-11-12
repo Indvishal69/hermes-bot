@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..connectors.base import ConnectorError
 from ..db import Database
 from ..utils import truncate
 from .files import Workspace, WorkspaceError
@@ -113,10 +114,17 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def tool_prompt_block() -> str:
-    """Render TOOL_SPECS as instructions for the model."""
+def tool_prompt_block(extra: dict[str, dict[str, Any]] | None = None) -> str:
+    """Render the tool list as instructions for the model.
+
+    ``extra`` carries connector tools, which are only present while their
+    connector is configured *and* enabled.
+    """
     lines = ["Available tools — reply with exactly ONE JSON object per step:", ""]
-    for name, spec in TOOL_SPECS.items():
+    specs = dict(TOOL_SPECS)
+    if extra:
+        specs.update(extra)
+    for name, spec in specs.items():
         args = ", ".join(f'"{key}": {value}' for key, value in spec["args"].items())
         gate = " [OWNER APPROVAL REQUIRED]" if spec["approval"] else ""
         lines.append(f'- {{"action":"{name}"{", " + args if args else ""}}}{gate}')
@@ -144,14 +152,32 @@ class ToolBox:
         db: Database,
         *,
         max_output_chars: int = 7_000,
+        connectors: Any | None = None,
     ):
         self.workspace = workspace
         self.runner = runner
         self.db = db
         self.max_output_chars = max_output_chars
+        self.connectors = connectors
+
+    # -- specs --------------------------------------------------------------
+    def connector_specs(self) -> dict[str, dict[str, Any]]:
+        if self.connectors is None:
+            return {}
+        return self.connectors.tool_specs()
+
+    def specs(self) -> dict[str, dict[str, Any]]:
+        merged = dict(TOOL_SPECS)
+        merged.update(self.connector_specs())
+        return merged
 
     def execute(self, action: dict[str, Any], *, project: str = "default") -> ToolResult:
         name = str(action.get("action", "")).strip()
+
+        # Connector tools are dynamic: only offered while active.
+        if self.connectors is not None and name in self.connectors.active_tools():
+            return self._execute_connector(name, action)
+
         spec = TOOL_SPECS.get(name)
         if spec is None:
             return ToolResult(
@@ -178,6 +204,46 @@ class ToolBox:
             return ToolResult(ok=False, action=name, text=f"{name} rejected: {exc}")
         except (OSError, ValueError) as exc:
             return ToolResult(ok=False, action=name, text=f"{name} failed: {type(exc).__name__}: {exc}")
+
+    def _execute_connector(self, name: str, action: dict[str, Any]) -> ToolResult:
+        # "reason" explains the call to the owner; it is not a tool argument.
+        args = {
+            key: value
+            for key, value in action.items()
+            if key not in ("action", "reason")
+        }
+        try:
+            summary = self.connectors.summary(name, args)
+        except Exception:  # noqa: BLE001 - summary must never block execution
+            summary = name
+        if self.connectors.needs_approval(name):
+            reason = str(action.get("reason", "") or "").strip() or (
+                f"{name} changes data on an external service"
+            )
+            return ToolResult(
+                ok=True,
+                action=name,
+                text="approval required",
+                requires_approval=True,
+                approval={
+                    "kind": "connector",
+                    "tool": name,
+                    "args": args,
+                    "summary": summary,
+                    "reason": reason,
+                },
+            )
+        try:
+            text = self.connectors.call(name, args)
+            return ToolResult(
+                ok=True, action=name, text=truncate(text, self.max_output_chars)
+            )
+        except ConnectorError as exc:
+            return ToolResult(ok=False, action=name, text=f"{name} failed: {exc}")
+        except (OSError, ValueError) as exc:
+            return ToolResult(
+                ok=False, action=name, text=f"{name} failed: {type(exc).__name__}: {exc}"
+            )
 
     # -- individual tools ---------------------------------------------------
     def _dispatch(self, name: str, action: dict[str, Any], *, project: str) -> str:
