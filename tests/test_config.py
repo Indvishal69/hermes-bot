@@ -17,7 +17,7 @@ def test_missing_required_values_are_all_reported():
     assert not settings.ok
     assert "DISCORD_TOKEN" in joined
     assert "ALLOWED_USER_ID" in joined
-    assert "GROQ_API_KEY or GEMINI_API_KEY" in joined
+    assert "GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY" in joined
 
 
 def test_non_numeric_owner_id_is_rejected():
@@ -54,7 +54,7 @@ def test_active_provider_without_key_switches_to_available_provider():
         }
     )
     assert settings.active_provider == "gemini"
-    assert settings.providers_configured == {"groq": False, "gemini": True}
+    assert settings.providers_configured == {"groq": False, "gemini": True, "openrouter": False}
 
 
 def test_bad_integer_uses_default_and_reports_problem():

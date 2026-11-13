@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import sys
 
@@ -317,3 +318,87 @@ def test_allowed_domains_come_from_config(make_settings):
     assert settings.web_allowed_domains == ("github.com", "docs.python.org")
     tools = WebTools(settings)
     assert tools.fetcher.allowed_domains == {"github.com", "docs.python.org"}
+
+
+# --------------------------------------------------------------------------
+# web_research (search + read several pages in one step)
+# --------------------------------------------------------------------------
+class _SearchResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.text = json.dumps(payload)
+
+    def json(self):
+        return self._payload
+
+
+class _SearchSession:
+    def __init__(self, results):
+        self.results = results
+        self.calls = 0
+
+    def post(self, url, **kwargs):
+        self.calls += 1
+        return _SearchResponse({"results": self.results})
+
+
+def _research_tools(make_settings, pages, results):
+    settings = make_settings(env={"SEARCH_PROVIDER": "tavily", "SEARCH_API_KEY": "tvly-x"})
+    tools = WebTools(settings)
+    tools.searcher = SearchClient(
+        provider="tavily", api_key="tvly-x", session=_SearchSession(results)
+    )
+
+    class _PageSession:
+        def get(self, url, **kwargs):
+            body = pages.get(url, b"<html><body>nothing</body></html>")
+            return FakeResponse(200, body, {"Content-Type": "text/html"})
+
+    tools.fetcher = HttpFetcher(session=_PageSession())
+    return tools
+
+
+def test_web_research_reads_several_pages_with_sources(make_settings):
+    pages = {
+        "https://a.example/1": b"<html><title>Page One</title><body>Alpha facts here.</body></html>",
+        "https://b.example/2": b"<html><title>Page Two</title><body>Beta facts here.</body></html>",
+    }
+    results = [
+        {"title": "Page One", "url": "https://a.example/1", "snippet": "alpha"},
+        {"title": "Page Two", "url": "https://b.example/2", "snippet": "beta"},
+        {"title": "Page Three", "url": "https://c.example/3", "snippet": "gamma"},
+    ]
+    tools = _research_tools(make_settings, pages, results)
+    text = tools.execute("web_research", {"query": "facts", "max_pages": 2})
+
+    assert "untrusted data" in text.lower()
+    assert "Alpha facts here." in text and "Beta facts here." in text
+    assert "SOURCES:" in text
+    assert "https://a.example/1" in text
+    assert "c.example" not in text            # max_pages respected
+
+
+def test_web_research_survives_a_page_that_cannot_be_read(make_settings):
+    class _Broken:
+        def get(self, url, **kwargs):
+            return FakeResponse(500, b"boom", {"Content-Type": "text/html"})
+
+    settings = make_settings(env={"SEARCH_PROVIDER": "tavily", "SEARCH_API_KEY": "tvly-x"})
+    tools = WebTools(settings)
+    tools.searcher = SearchClient(
+        provider="tavily", api_key="tvly-x",
+        session=_SearchSession([{"title": "Broken", "url": "https://x.example/", "snippet": ""}]),
+    )
+    tools.fetcher = HttpFetcher(session=_Broken())
+    text = tools.execute("web_research", {"query": "anything", "max_pages": 1})
+    assert "could not be read" in text
+
+
+def test_web_research_requires_search(make_settings):
+    tools = WebTools(make_settings())
+    assert "web_research" not in tools.specs()
+    with pytest.raises(WebToolError):
+        tools.execute("web_research", {"query": "x"})

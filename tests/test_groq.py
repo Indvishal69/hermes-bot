@@ -272,3 +272,45 @@ def test_unconfigured_provider_refuses_to_call():
     assert provider.list_models() == []
     with pytest.raises(ProviderError):
         provider.complete([{"role": "user", "content": "hi"}])
+
+
+def test_tool_use_failed_recovers_the_json_the_model_produced():
+    """gpt-oss sometimes emits a native tool call even though none were offered."""
+    session = FakeSession(posts=[
+        (400, {"error": {
+            "message": "Tool choice is none, but model called a tool",
+            "type": "invalid_request_error",
+            "code": "tool_use_failed",
+            "failed_generation": '<|channel|>commentary to=functions.act <|constrain|>json'
+                                 '{"action":"final","message":"recovered from failed_generation"}',
+        }}),
+    ])
+    provider = make_provider(session)
+    result = provider.complete([{"role": "user", "content": "hi"}])
+    assert "recovered from failed_generation" in result
+    assert len(session.post_calls) == 1
+
+
+def test_tool_use_failed_without_usable_json_is_retried_with_a_nudge():
+    session = FakeSession(posts=[
+        (400, {"error": {"message": "Tool choice is none, but model called a tool",
+                         "code": "tool_use_failed",
+                         "failed_generation": "<|channel|>commentary to=functions.x"}}),
+        (200, {"choices": [{"message": {"content": "after nudge"}}]}),
+    ])
+    provider = make_provider(session)
+    assert provider.complete([{"role": "user", "content": "hi"}]) == "after nudge"
+    assert len(session.post_calls) == 2
+    second = session.post_calls[1]["messages"]
+    assert second[0]["role"] == "system"          # the nudge joins the system prompt
+    assert "JSON object" in second[0]["content"]
+
+
+def test_tool_use_failed_twice_reports_the_model_problem():
+    bad = (400, {"error": {"message": "Tool choice is none, but model called a tool",
+                           "code": "tool_use_failed", "failed_generation": ""}})
+    session = FakeSession(posts=[bad, bad])
+    provider = make_provider(session)
+    with pytest.raises(ProviderError) as excinfo:
+        provider.complete([{"role": "user", "content": "hi"}])
+    assert "tool_use_failed" in str(excinfo.value)

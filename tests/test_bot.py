@@ -518,3 +518,21 @@ def test_denying_a_connector_action_runs_nothing(settings):
     loop, channel = asyncio.run(scenario())
     assert loop.resumes and loop.resumes[0]["approved"] is False
     assert not any("wrote hi" in text for text in channel.sent)
+
+
+def test_capabilities_lists_providers_connectors_and_limits(settings):
+    async def scenario():
+        db = Database(settings.db_path); db.init()
+        registry = make_registry(db)
+        bot = make_bot(settings, connectors=registry)
+        channel = FakeChannel()
+        await bot.on_message(FakeMessage(channel, "!capabilities"))
+        return channel
+
+    text = asyncio.run(scenario()).sent[0]
+    assert "capabilities" in text.lower()
+    assert "AI providers" in text
+    assert "Connectors: 1/1 connected" in text
+    assert "echo_write" not in text          # the matrix summarises, it does not dump
+    assert "need approval" in text
+    assert "steps/task" in text
