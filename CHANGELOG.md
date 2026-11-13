@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.3.0 — 13 November 2026
+
+**New: OpenRouter, YouTube upload, web research, and a capability screen — plus a fix
+for `tool_use_failed`.**
+
+* **OpenRouter provider.** `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default
+  `openrouter/auto`), `OPENROUTER_FALLBACK_MODELS`. A model that is gated, retired or
+  rate-limited rotates to the next model in the chain; an auth error stops immediately
+  because rotating cannot fix a bad key. `ACTIVE_PROVIDER=openrouter` works like the
+  other two.
+* **YouTube connector** (`YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`,
+  `YOUTUBE_REFRESH_TOKEN`): channel stats, recent videos, resumable upload of a file from
+  the workspace, and metadata updates. Upload/update are writes, so they need `!approve`.
+  `scripts/youtube_auth.py` does the one-time OAuth dance and prints the refresh token.
+* **`web_research`** — search, read the top 1–5 pages, return a sourced dossier in one
+  step instead of five fetch steps (which matters on free-tier rate limits).
+* **`!capabilities`** — providers with their model chains, connectors with read/write
+  tool counts, available web tools, and the active limits.
+* **Fixed: Groq `tool_use_failed`.** gpt-oss sometimes emits a native tool call though
+  none were offered; Groq's 400 carries the intended output in `failed_generation`.
+  Hermes now salvages the JSON from it, or retries once with a JSON-only nudge.
+* Connectors can now read files from the workspace (needed for uploads), still confined
+  to `WORKSPACE_DIR`.
+* Tests: 30 new (329 total). Docs: connectors, browser, rate limits and README updated.
+
 ## 3.2.3 — 12 November 2026
 
 **Fixed: a 9-second rate limit turned into a failed task.**

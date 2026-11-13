@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-299 passed in 15.13s
+329 passed in 15.95s
 ```
 
 Coverage by area (all passing):
@@ -41,13 +41,15 @@ Coverage by area (all passing):
 | `tests/test_db.py` (11) | migrations idempotent; v1→v2 upgrade keeps data; per-user trimming; history limit/clear; notes; task lifecycle; audit ok/failed; kv expiry; online backup + restore roundtrip; restore refuses a foreign file; stats |
 | `tests/test_files.py` (20) | write/read; Created vs Updated; `../`, absolute, nested-escape and NUL paths rejected; symlink escape rejected; size limit; `.git` writes refused; line windows; replace; delete rules; list/tree; search by glob; zip contents; workspace info |
 | `tests/test_shell.py` (42) | 11 legitimate commands allowed (incl. `pip install python-dotenv` — a 2.0 false positive); 20 dangerous commands rejected (`rm -rf /`, `sudo`, `curl`, `bash -c`, `&&`, pipes, `>`, `os.environ`, `.env`, `git push`, `git reset --hard`, absolute paths, …); `git push` only with `ALLOW_GIT_PUSH`; force-push always blocked; real execution with exit codes; timeout kills the process; rejected command never runs; **child process cannot see `DISCORD_TOKEN`/`GROQ_API_KEY`**; syntax checker; process registry |
-| `tests/test_router.py` (19) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
+| `tests/test_router.py` (17) | preference order; fallback on failure; cooldown ordering; all-fail reports every error; unconfigured skipped; no-provider error; `prefer=`; success clears error; unexpected exception wrapped; secrets redacted from recorded errors; duplicate order entries de-duplicated |
 | `tests/test_gemini.py` (26) | name normalisation; text-model filtering (tts/live/image/embedding/transcribe/computer-use excluded, `supportedActions` respected); configured-model preference; fallback to preferred; auto-selection; flash preference; empty-list behaviour; **roles preserved** (`user/model/user`), consecutive turns merged, `system_instruction` passed; retired model triggers re-discovery + retry; auth error not retried; quota classified retryable; `finish_reason=SAFETY` reported as blocked; listing error surfaced |
 | `tests/test_loop.py` (20) | write-then-final; tool result fed back; **command requires approval and does not execute**; resume after approval; blocked command never offered for approval; invalid JSON repaired once; fenced JSON accepted; provider failure reported honestly; step limit yields an honest summary; model path escape rejected; secrets redacted from reported errors; conversation history reused; project memory persisted |
-| `tests/test_groq.py` (30) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
-| `tests/test_browsing.py` (37) | SSRF guard: non-HTTP schemes, embedded credentials, odd ports, `localhost`/`*.internal`, IP literals (loopback, RFC1918, `169.254.169.254`, `::1`), hostnames resolving to private IPs, redirect hops re-validated, redirect limit, domain allowlist; extraction (script/style stripped, title, absolute links); fetch limits (2 MB cap, non-text refusal, HTTP errors); search providers (tavily/brave/searxng parsing, 401 hint, unconfigured message); tool gating (disabled → no tools, search/browser only when usable); `browser_open` without Playwright explains the install |
+| `tests/test_groq.py` (33) | chat-model filtering (whisper/tts/orpheus/guard excluded); configured model honoured; **retired ID replaced by `openai/gpt-oss-120b` and the call retried**; auto-selection; only-non-chat models rejected; empty list keeps the configured ID; default model is not a retired ID; listing cache; 429 retried; 401 not retried; payload uses `max_completion_tokens` and a real system message; empty message reports `finish_reason`; listing failure surfaced without blocking |
+| `tests/test_browsing.py` (40) | SSRF guard: non-HTTP schemes, embedded credentials, odd ports, `localhost`/`*.internal`, IP literals (loopback, RFC1918, `169.254.169.254`, `::1`), hostnames resolving to private IPs, redirect hops re-validated, redirect limit, domain allowlist; extraction (script/style stripped, title, absolute links); fetch limits (2 MB cap, non-text refusal, HTTP errors); search providers (tavily/brave/searxng parsing, 401 hint, unconfigured message); tool gating (disabled → no tools, search/browser only when usable); `browser_open` without Playwright explains the install |
 | `tests/test_connectors.py` (46) | input validation (`safe_id`/`safe_path`/`safe_repo` reject traversal, spaces, hosts); HttpClient refuses absolute URLs and adds hints on 401/404; registry: active-by-default, missing env, disable/enable persistence across a restart, settings validation and persistence, tool-spec approval flags, secret redaction in errors; real connectors against fake HTTP (GitHub repo/file/issue, Notion page-URL parsing and paragraph blocks, Slack `ok:false`, Cloudflare purge body, Render deploy URL) |
-| `tests/test_bot.py` (21) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
+| `tests/test_bot.py` (22) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
+| `tests/test_openrouter.py` (12) | model chain de-duplication; `openrouter/auto` default; fallbacks from env; primary model used; 404/403 rotates to the next model; **401 does not rotate**; 429 carries the retry hint; empty content reported; content parts joined; listing cache; retired model resolved from the chain |
+| `tests/test_youtube.py` (11) | token fetched once and cached; refresh failure explains `youtube_auth.py`; channel/video parsing; **resumable upload** streams the workspace file with the right length, MIME and privacy; refuses missing/oversized files, bad privacy and paths outside the workspace; update merges existing fields; write tools marked for approval |
 | `tests/test_web_and_utils.py` (18) | `/health` 200 + payload; **no paths or secrets in the response**; unhealthy database → 503; `/ready` and `/`; redaction of key shapes; JSON extraction (plain, fenced, embedded, malformed); backoff growth and cap; truncate/chunk; human helpers |
 
 ## 3. Preflight (`python agent.py --check`)
@@ -348,3 +350,38 @@ quarter of it.
 **Not verified against the live APIs:** the hint parsing and waiting logic are tested with
 fakes built from the exact error text you sent. `!testai` after deploying is the real
 check.
+
+
+## 14. Fifth production finding + the 3.3.0 feature round
+
+### The bug in your screenshot
+
+```
+groq: HTTP 400: {"error":{"message":"Tool choice is none, but model called a tool",
+       "type":"invalid_request_error","code":"tool_use_failed", ...}}
+```
+
+`gpt-oss` models sometimes emit a **native tool call** even though Hermes offers no
+tools — the model has learned that shape. Groq rejects the whole request, but includes
+`failed_generation` with what the model actually produced, which is usually the JSON
+action we asked for.
+
+* Hermes now salvages the JSON from `failed_generation` and uses it (the step succeeds).
+* If nothing usable is there, it retries once with a system nudge ("reply with exactly
+  one JSON object, no tool calls"), then fails with a clear message.
+* Tests: `test_tool_use_failed_recovers_the_json_the_model_produced`,
+  `test_tool_use_failed_without_usable_json_is_retried_with_a_nudge`,
+  `test_tool_use_failed_twice_reports_the_model_problem`.
+
+### New in 3.3.0
+
+| Feature | Verified by |
+| --- | --- |
+| OpenRouter provider, `openrouter/auto`, fallback model chain, rotation on 404/403/429 | 12 tests |
+| YouTube connector: channel, videos, resumable upload, update | 11 tests |
+| `web_research`: search + read top pages + sourced dossier | 3 tests |
+| `!capabilities`: one-screen capability matrix | 1 test |
+
+**Not verified:** real OpenRouter calls, a real YouTube upload (OAuth consent + a real
+video file), and a real search provider. Those need your keys; `!testai`,
+`!connector youtube test` and a small `web_research` task are the checks after deploying.

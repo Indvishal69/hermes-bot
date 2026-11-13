@@ -61,6 +61,18 @@ services:
         sync: false
       - key: NETLIFY_TOKEN
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: openrouter/auto
+      - key: OPENROUTER_FALLBACK_MODELS
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
       - key: RENDER_API_KEY
         sync: false
       - key: VERCEL_TOKEN

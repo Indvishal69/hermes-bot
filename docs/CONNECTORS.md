@@ -50,6 +50,7 @@ Three rules the code enforces:
 | `github` | `GITHUB_TOKEN` | `github_whoami` R, `github_list_repos` R, `github_get_repo` R, `github_list_branches` R, `github_get_file` R, `github_list_issues` R, `github_list_pulls` R, `github_create_issue` W, `github_commit_file` W |
 | `notion` | `NOTION_TOKEN` | `notion_search` R, `notion_get_page` R, `notion_query_database` R, `notion_append_text` W |
 | `slack` | `SLACK_BOT_TOKEN` | `slack_list_channels` R, `slack_post_message` W |
+| `youtube` | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | `youtube_channel_info` R, `youtube_list_videos` R, `youtube_upload_video` W, `youtube_update_video` W |
 | `netlify` | `NETLIFY_TOKEN` | `netlify_list_sites` R, `netlify_get_site` R, `netlify_list_deploys` R, `netlify_get_deploy` R, `netlify_trigger_build` W, `netlify_cancel_deploy` W |
 | `render` | `RENDER_API_KEY` | `render_list_services` R, `render_list_deploys` R, `render_trigger_deploy` W |
 | `vercel` | `VERCEL_TOKEN` | `vercel_list_projects` R, `vercel_list_deployments` R |
@@ -67,6 +68,10 @@ Missing env vars are shown by name in `!connectors` — never their values.
 * **Notion** — create an internal integration, share the pages/databases with it, copy
   the token. A pasted Notion URL is accepted wherever an id is asked for.
 * **Slack** — bot token with `channels:read` and `chat:write`.
+* **YouTube** — OAuth2, not an API key. Run `python scripts/youtube_auth.py` once, approve
+  access, and copy the three values it prints into the host's environment. The upload
+  reads a file from the workspace, is capped by `YOUTUBE_MAX_UPLOAD_MB` (default 128),
+  and always waits for `!approve`.
 * **Netlify** — personal access token (User settings → Applications → Personal access
   tokens). Read tools work with any token; `netlify_trigger_build` needs the *build*
   permission, and the site must have build settings or a linked repo.
@@ -83,6 +88,7 @@ Missing env vars are shown by name in `!connectors` — never their values.
 | `notion` | `default_page`, `default_database` | used when an id is omitted |
 | `slack` | `default_channel` | channel id or `#name` |
 | `netlify` | `default_site` | site id or site name |
+| `youtube` | `default_privacy` | `private` (default), `unlisted` or `public` for uploads |
 | `render` | `default_service` | service id |
 | `cloudflare` | `default_zone` | zone id |
 
@@ -162,3 +168,17 @@ failures, and never include a token in a returned string.
 | `no default_repo given and no default saved` | pass `repo` in the call or run `!connector github set default_repo=owner/name` |
 | `Connector tool 'x' is not available` | that connector is disconnected or unconfigured |
 | Settings disappeared after a deploy | `DATA_DIR` is on an ephemeral disk — see [DEPLOYMENT.md](DEPLOYMENT.md) |
+
+## Worked example: build something and upload it
+
+```
+you:  make a 30-second demo clip in demo/ and upload it to YouTube as unlisted
+bot:  (writes demo/…, then) youtube_upload_video(path="demo/clip.mp4", title="Demo",
+      privacy="unlisted") — approval required
+you:  !approve 3f9c1a2b
+bot:  Uploaded 'Demo' as unlisted: https://youtu.be/xxxx (1024 KB)
+```
+
+The upload streams the file from the workspace, so a large video never sits in memory.
+If the file is outside the workspace, or bigger than the cap, the tool refuses before
+contacting Google.

@@ -29,8 +29,11 @@ Flask:  /health  /ready  /           (Render health checks)
   preserved, quota/auth/model/blocked errors reported verbatim, retry with
   backoff, automatic re-discovery if a model ID is retired.
 * **Web access** — `web_fetch` / `web_links` (strict SSRF guard, stdlib HTML→text),
-  `web_search` (Tavily/Brave/SearXNG) and an opt-in headless browser for JavaScript
-  pages. See [docs/BROWSER.md](docs/BROWSER.md).
+  `web_search` (Tavily/Brave/SearXNG), `web_research` (reads the top pages and returns
+  a sourced dossier in one step) and an opt-in headless browser for JavaScript pages.
+  See [docs/BROWSER.md](docs/BROWSER.md).
+* **OpenRouter** as a third provider with automatic model switching
+  (`openrouter/auto` by default, plus a fallback model list).
 * **Provider fallback** with per-provider cooldown and a `!model` switch.
 * **Model-availability checks for both providers** — Groq and Gemini IDs are checked
   against the account's model list and a working replacement is chosen when one is
@@ -40,7 +43,8 @@ Flask:  /health  /ready  /           (Render health checks)
 * **Approval gate** for every shell command, with expiry, denial path and audit log.
 * **Memory**: conversation history, project notes, task history, audit trail,
   online SQLite backups and forward-only migrations.
-* **Connectors** — GitHub, Notion, Slack, Netlify, Render, Vercel, Cloudflare and Hugging Face
+* **Connectors** — GitHub, Notion, Slack, Netlify, Render, Vercel, Cloudflare,
+  Hugging Face and YouTube (upload from the workspace, needs OAuth)
   as pluggable tools: credentials from env vars, enabled state and settings saved in
   SQLite, read tools free, write tools behind `!approve`. See
   [docs/CONNECTORS.md](docs/CONNECTORS.md).
@@ -133,6 +137,7 @@ Then in Discord, DM the bot or mention it in a channel it can read: `!health`, t
 | `!connector NAME [test]` | Detail, live check |
 | `!connector NAME set key=value` | Save a non-secret setting |
 | `!web <url>` | Fetch a page and show what the agent would read |
+| `!capabilities` | One screen: providers, connectors, web tools, limits |
 | `!restart` | Restart the process (`os.execv`) |
 
 Anything else is treated as a task. Tasks are rate-limited (`TASK_RATE_LIMIT`,
@@ -149,6 +154,9 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Any Groq chat model; if the ID is retired or not on your plan, a working chat model is selected automatically |
 | `GROQ_REASONING_EFFORT` | `low` | Reasoning models (gpt-oss/qwen3) only: keeps thinking short so the answer is not starved |
 | `GEMINI_MODEL` | *(empty)* | Empty = auto-discover a text model for the key |
+| `OPENROUTER_API_KEY` | *(empty)* | Enables the OpenRouter provider |
+| `OPENROUTER_MODEL` | `openrouter/auto` | Let OpenRouter route, or pin a model |
+| `OPENROUTER_FALLBACK_MODELS` | *(empty)* | Comma-separated models tried when one fails |
 | `GEMINI_API_BASE` | *(empty)* | Only for a compatible proxy/endpoint |
 | `MAX_AGENT_STEPS` | `8` | Tool steps per task (1–25) |
 | `AI_TIMEOUT` | `150` | Seconds per model call |
@@ -172,6 +180,8 @@ Required: `DISCORD_TOKEN`, `ALLOWED_USER_ID`, and at least one of `GROQ_API_KEY`
 | `NOTION_TOKEN` | *(empty)* | Notion connector |
 | `SLACK_BOT_TOKEN` | *(empty)* | Slack connector (`channels:read`, `chat:write`) |
 | `NETLIFY_TOKEN` | *(empty)* | Netlify connector (sites, deploys, trigger build) |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | *(empty)* | YouTube connector (OAuth, see scripts/youtube_auth.py) |
+| `YOUTUBE_MAX_UPLOAD_MB` | `128` | Upload size cap |
 | `RENDER_API_KEY` | *(empty)* | Render connector |
 | `VERCEL_TOKEN` | *(empty)* | Vercel connector |
 | `CLOUDFLARE_API_TOKEN` | *(empty)* | Cloudflare connector |
@@ -196,6 +206,7 @@ hermes/
   utils.py                   redaction, JSON extraction, backoff, chunking
   providers/
     base.py                  Provider interface, ProviderError taxonomy
+    openrouter.py            OpenRouter with model chain + auto switching
     groq.py                  Groq chat completions with retries
     gemini.py                google-genai SDK, model discovery, error mapping
     router.py                preference order, fallback, cooldown
@@ -208,8 +219,9 @@ hermes/
   web.py                     Flask health endpoints
   connectors/                pluggable services: base, registry, github, notion,
                              slack, platforms (render/vercel/cloudflare/hf)
-  browsing/                  web fetch + SSRF guard, search, optional browser
-tests/                       299 pytest tests (no network, no credentials needed)
+  browsing/                  web fetch + SSRF guard, search, research, optional browser
+scripts/                     youtube_auth.py (one-time OAuth helper)
+tests/                       329 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 

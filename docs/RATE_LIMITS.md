@@ -57,8 +57,11 @@ six steps will hit the ceiling mid-task.
 | Both limited at once | keep `ACTIVE_PROVIDER=groq`, `RATE_LIMIT_WAIT_CAP=20`, and send shorter tasks |
 | Long tasks keep dying | split the task into two messages — each one restarts the token budget |
 
-If you need uninterrupted agent work, a Groq Dev-tier key or a billed Gemini project is
-the honest answer; the free tiers are not sized for a multi-step agent.
+If you need uninterrupted agent work, there are three honest answers: a Groq Dev-tier
+key, a billed Gemini project, or **OpenRouter** (`OPENROUTER_API_KEY`) — it fronts many
+models, `openrouter/auto` picks one per request, and
+`OPENROUTER_FALLBACK_MODELS=model-a,model-b` gives Hermes a chain to rotate through when
+a model is gated or rate-limited.
 
 ## Reading the errors
 

@@ -21,6 +21,7 @@ fine.
 | `web_fetch` | `url`, `max_chars` | Returns readable text plus HTTP status, title and redirect chain |
 | `web_links` | `url` | Lists `<a href>` links, resolved to absolute URLs |
 | `web_search` | `query`, `limit` | Only offered when a search provider is configured |
+| `web_research` | `query`, `max_pages` | Search, then read the top 1–5 pages and return a sourced dossier — one step instead of five |
 | `browser_open` | `url`, `wait` | Only offered when `BROWSER_ENABLED=true` |
 
 All four are read-only, so they do not need `!approve`. What they *can* do is bring
