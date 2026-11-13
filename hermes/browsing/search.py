@@ -69,6 +69,29 @@ class SearchClient:
             "configured": self.configured,
         }
 
+    def search_results(self, query: str, limit: int = 5) -> list[dict[str, str]]:
+        """Structured results, used by search and by web_research."""
+        query = (query or "").strip()
+        if not query:
+            raise SearchError("No search query given.")
+        if not self.configured:
+            raise SearchError(
+                "Web search is not configured. Set SEARCH_PROVIDER and SEARCH_API_KEY "
+                "(tavily/brave) or SEARCH_PROVIDER=searxng with SEARXNG_URL. "
+                "Without search you can still open a known URL with web_fetch."
+            )
+        limit = max(1, min(int(limit or 5), 10))
+        try:
+            if self.provider == "tavily":
+                return self._tavily(query, limit)
+            if self.provider == "brave":
+                return self._brave(query, limit)
+            if self.provider == "searxng":
+                return self._searxng(query, limit)
+        except requests.RequestException as exc:
+            raise SearchError(f"search network error {type(exc).__name__}: {self._clean(exc)}") from exc
+        raise SearchError(f"Unknown search provider '{self.provider}'.")
+
     def search(self, query: str, limit: int = 5) -> str:
         query = (query or "").strip()
         if not query:

@@ -127,7 +127,11 @@ def build_runtime(settings):
         allow_git_push=settings.allow_git_push,
     )
     connectors = ConnectorRegistry(
-        db, secrets=settings.secrets, max_chars=settings.max_output_chars
+        db,
+        secrets=settings.secrets,
+        max_chars=settings.max_output_chars,
+        workspace=workspace,
+        youtube_max_upload_mb=settings.youtube_max_upload_mb,
     )
     webtools = WebTools(settings)
     toolbox = ToolBox(

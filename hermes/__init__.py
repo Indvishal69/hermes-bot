@@ -3,5 +3,5 @@
 Public entry point: ``agent.py`` in the project root.
 """
 
-__version__ = "3.2.3"
+__version__ = "3.3.0"
 APP_NAME = "Hermes 3.0"

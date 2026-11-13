@@ -41,6 +41,7 @@ HELP_TEXT = """**{app} — commands**
 `!connector NAME` — detail; `!connector NAME test` — live check;
 `!connector NAME set key=value` — save a non-secret setting
 `!web <url>` — fetch a page and show what the agent would read
+`!capabilities` — everything Hermes can do right now
 `!restart` — restart the bot process
 
 Send any other message to give Hermes a task."""
@@ -247,6 +248,9 @@ class HermesBot(discord.Client):
         if command == "!connector":
             await self._cmd_connector(message, arg)
             return True
+        if command == "!capabilities":
+            await self._send(message.channel, self._capabilities_text())
+            return True
         if command == "!web":
             await self._cmd_web(message, arg)
             return True
@@ -443,6 +447,57 @@ class HermesBot(discord.Client):
             except Exception as exc:  # noqa: BLE001
                 lines.append(f"❌ {name}: {type(exc).__name__}: {self._clean(exc)}")
         await status.edit(content=truncate(self._clean("\n".join(lines)), 1_900))
+
+    def _capabilities_text(self) -> str:
+        """One screen: what is wired up right now, and what is gated."""
+        lines = [f"**{APP_NAME} {__version__} — capabilities**"]
+
+        providers = self.router.status() if self.router else []
+        lines.append("AI providers:")
+        for row in providers:
+            state = "configured" if row["configured"] else "not configured"
+            extra = f", cooling {row['cooldown_seconds']}s" if row.get("cooldown_seconds") else ""
+            chain = row.get("chain")
+            model = row.get("model") or "-"
+            if chain and len(chain) > 1:
+                model += f" (fallbacks: {len(chain) - 1})"
+            lines.append(f"  • {row['provider']}: {state}, `{model}`{extra}")
+
+        if self.connectors is not None:
+            rows = self.connectors.status()
+            active = [row for row in rows if row["enabled"]]
+            lines.append(f"Connectors: {len(active)}/{len(rows)} connected")
+            for row in active:
+                writes = sum(1 for tool in row["tools"] if tool["write"])
+                lines.append(
+                    f"  • {row['name']}: {row['tool_count']} tools "
+                    f"({row['tool_count'] - writes} read, {writes} need approval)"
+                )
+            missing = [row["name"] for row in rows if not row["configured"]]
+            if missing:
+                lines.append(f"  not configured: {', '.join(missing)}")
+
+        if self.webtools is not None:
+            specs = self.webtools.specs()
+            lines.append("Web: " + (", ".join(f"`{name}`" for name in sorted(specs)) or "disabled"))
+            info = self.webtools.status()
+            lines.append(
+                f"  search: {info['search']['provider']}"
+                f"{'' if info['search']['configured'] else ' (not configured)'}"
+                f" · browser: {'on' if info['browser_enabled'] else 'off'}"
+            )
+
+        lines.append(
+            f"Limits: {self.settings.max_agent_steps} steps/task · "
+            f"{self.settings.command_timeout}s per command · "
+            f"{self.settings.max_output_chars} chars per result · "
+            f"{self.settings.max_completion_tokens} completion tokens"
+        )
+        lines.append(
+            "Every shell command and every write to an external service still waits for "
+            "`!approve`. `!help` lists the commands."
+        )
+        return "\n".join(lines)
 
     def _connectors_text(self) -> str:
         if self.connectors is None:
