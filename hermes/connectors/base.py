@@ -188,8 +188,11 @@ class Connector:
         max_chars: int = 7_000,
         secrets: Iterable[str] = (),
         session: requests.Session | None = None,
+        workspace: Any = None,
     ):
         self.credentials = dict(credentials or {})
+        # Only connectors that read files from the sandbox need this.
+        self.workspace = workspace
         self.settings = {key: str(value) for key, value in (settings or {}).items()}
         self.timeout = timeout
         self.max_chars = max_chars

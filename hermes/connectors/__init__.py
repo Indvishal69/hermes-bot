@@ -20,6 +20,7 @@ from .platforms import (
 )
 from .registry import CONNECTOR_CLASSES, ConnectorRegistry
 from .slack import SlackConnector
+from .youtube import YouTubeConnector
 
 __all__ = [
     "Connector",
@@ -37,6 +38,7 @@ __all__ = [
     "VercelConnector",
     "CloudflareConnector",
     "HuggingFaceConnector",
+    "YouTubeConnector",
     "ConnectorRegistry",
     "CONNECTOR_CLASSES",
 ]

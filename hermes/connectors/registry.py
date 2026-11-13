@@ -24,6 +24,7 @@ from .platforms import (
     VercelConnector,
 )
 from .slack import SlackConnector
+from .youtube import YouTubeConnector
 
 log = logging.getLogger("hermes.connectors.registry")
 
@@ -32,6 +33,7 @@ CONNECTOR_CLASSES: tuple[type[Connector], ...] = (
     NotionConnector,
     SlackConnector,
     NetlifyConnector,
+    YouTubeConnector,
     RenderConnector,
     VercelConnector,
     CloudflareConnector,
@@ -50,6 +52,8 @@ class ConnectorRegistry:
         secrets: Iterable[str] = (),
         timeout: int = 30,
         max_chars: int = 7_000,
+        workspace: Any = None,
+        youtube_max_upload_mb: int = 128,
         classes: Iterable[type[Connector]] = CONNECTOR_CLASSES,
     ):
         import os
@@ -59,6 +63,8 @@ class ConnectorRegistry:
         self.secrets = tuple(secrets)
         self.timeout = timeout
         self.max_chars = max_chars
+        self.workspace = workspace
+        self.youtube_max_upload_mb = max(1, int(youtube_max_upload_mb))
         self.classes = tuple(classes)
         self.connectors: dict[str, Connector] = {}
         self.refresh()
@@ -74,12 +80,17 @@ class ConnectorRegistry:
                 key: (self.env.get(key) or "").strip()
                 for key in (*cls.env_vars, *cls.optional_env_vars)
             }
+            extra: dict[str, Any] = {}
+            if cls.name == "youtube":
+                extra["max_upload_mb"] = self.youtube_max_upload_mb
             built[cls.name] = cls(
                 credentials,
                 state.get("settings", {}),
                 timeout=self.timeout,
                 max_chars=self.max_chars,
                 secrets=self.secrets,
+                workspace=self.workspace,
+                **extra,
             )
         self.connectors = built
 
