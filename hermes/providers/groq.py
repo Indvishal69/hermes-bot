@@ -13,7 +13,9 @@ warning, so the configured model is checked against
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from typing import Any, Iterable
 
@@ -68,6 +70,33 @@ NON_CHAT_MARKERS = (
 )
 
 
+def salvage_failed_generation(raw: Any) -> str:
+    """Recover usable output from Groq's ``tool_use_failed`` payload.
+
+    gpt-oss models sometimes emit a native tool call even though no tools were
+    sent ("Tool choice is none, but model called a tool"). Groq returns HTTP 400
+    with ``failed_generation`` holding what the model actually produced — often
+    the JSON object we asked for. Recovering it saves the step instead of
+    failing the task.
+    """
+    text = raw if isinstance(raw, str) else str(raw or "")
+    if not text.strip():
+        return ""
+    # Strip the model's tool-call markers, then look for a JSON object.
+    cleaned = re.sub(r"<\|[^|]*\|>", " ", text)
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start == -1 or end <= start:
+        return ""
+    candidate = cleaned[start : end + 1]
+    try:
+        obj = json.loads(candidate)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if isinstance(obj, dict) and isinstance(obj.get("action"), str):
+        return json.dumps(obj)
+    return ""
+
+
 def is_chat_model(name: str) -> bool:
     """True when *name* looks like a Groq chat/completion model."""
     model = (name or "").strip().lower()
@@ -85,6 +114,14 @@ def select_model(available: Iterable[str], configured: str = "") -> tuple[str | 
         usable=is_chat_model,
         label="chat model",
     )
+
+
+def _is_json(response: Any) -> bool:
+    try:
+        response.json()
+        return True
+    except Exception:  # noqa: BLE001 - malformed body is fine to ignore
+        return False
 
 
 class GroqProvider(Provider):
@@ -253,6 +290,7 @@ class GroqProvider(Provider):
         last_error: ProviderError | None = None
         effort: str | None = None
         token_budget = max_tokens
+        nudge_sent = False
 
         for attempt in range(1, self.max_retries + 1):
             payload = self._payload(
@@ -296,6 +334,37 @@ class GroqProvider(Provider):
                 body = self._clean(response.text)
                 kind = self._classify(response.status_code)
                 lowered = body.lower()
+
+                # A native tool call we never offered: salvage the JSON the
+                # model produced, or retry once with an explicit instruction.
+                if response.status_code == 400 and "tool_use_failed" in lowered:
+                    salvaged = salvage_failed_generation(
+                        (response.json().get("error") or {}).get("failed_generation")
+                        if _is_json(response)
+                        else ""
+                    )
+                    if salvaged:
+                        log.warning("Groq tool_use_failed: recovered the JSON action")
+                        return salvaged
+                    if not nudge_sent:
+                        nudge_sent = True
+                        messages = list(messages) + [{
+                            "role": "system",
+                            "content": (
+                                "Do not emit tool calls or function syntax. Reply with "
+                                "exactly one JSON object and nothing else."
+                            ),
+                        }]
+                        log.warning("Groq tool_use_failed: retrying with a JSON-only nudge")
+                        continue
+                    last_error = ProviderError(
+                        self.name,
+                        "the model tried to call a tool that was not offered "
+                        "(tool_use_failed). Try a different GROQ_MODEL.",
+                        kind=OTHER,
+                        status=400,
+                    )
+                    raise last_error
 
                 # Older/newer models may reject the reasoning knobs: drop them
                 # once and retry immediately instead of failing the task.
