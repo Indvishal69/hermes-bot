@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VALID_PROVIDERS = ("groq", "gemini")
+VALID_PROVIDERS = ("groq", "gemini", "openrouter")
 
 
 class ConfigError(RuntimeError):
@@ -75,6 +75,9 @@ class Settings:
     active_provider: str = "groq"
     groq_model: str = "openai/gpt-oss-120b"
     groq_reasoning_effort: str = "low"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openrouter/auto"
+    openrouter_fallbacks: tuple[str, ...] = ()
     gemini_model: str = ""  # empty => auto-discover a working text model
     gemini_api_base: str = ""
     # --- agent behaviour ---------------------------------------------------
@@ -91,6 +94,11 @@ class Settings:
     command_timeout: int = 45
     allow_git_push: bool = False
     approval_ttl: int = 900
+    # --- connectors: YouTube ------------------------------------------------
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
+    youtube_refresh_token: str = ""
+    youtube_max_upload_mb: int = 128
     # --- web access --------------------------------------------------------
     web_enabled: bool = True
     web_timeout: int = 20
@@ -145,12 +153,19 @@ class Settings:
             self.cloudflare_api_token,
             self.huggingface_token,
             self.search_api_key,
+            self.openrouter_api_key,
+            self.youtube_client_secret,
+            self.youtube_refresh_token,
         )
         return tuple(value for value in candidates if value and len(value) >= 8)
 
     @property
     def providers_configured(self) -> dict[str, bool]:
-        return {"groq": bool(self.groq_api_key), "gemini": bool(self.gemini_api_key)}
+        return {
+            "groq": bool(self.groq_api_key),
+            "gemini": bool(self.gemini_api_key),
+            "openrouter": bool(self.openrouter_api_key),
+        }
 
     def redacted_summary(self) -> dict[str, object]:
         """Safe-to-log snapshot (never includes secret values)."""
@@ -167,6 +182,7 @@ class Settings:
             "web_enabled": self.web_enabled,
             "browser_enabled": self.browser_enabled,
             "search_provider": self.search_provider or "(none)",
+            "openrouter_model": self.openrouter_model,
             "groq_reasoning_effort": self.groq_reasoning_effort or "(default)",
             "quota_cooldown": self.quota_cooldown,
         }
@@ -192,8 +208,11 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
 
     groq_key = _get(env, "GROQ_API_KEY")
     gemini_key = _get(env, "GEMINI_API_KEY")
-    if not groq_key and not gemini_key:
-        problems.append("Set at least one of GROQ_API_KEY or GEMINI_API_KEY.")
+    openrouter_key = _get(env, "OPENROUTER_API_KEY")
+    if not groq_key and not gemini_key and not openrouter_key:
+        problems.append(
+            "Set at least one of GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY."
+        )
 
     active = _get(env, "ACTIVE_PROVIDER", "groq").lower()
     if active not in VALID_PROVIDERS:
@@ -201,12 +220,20 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
             f"ACTIVE_PROVIDER must be one of {VALID_PROVIDERS} (got {active!r}); using 'groq'."
         )
         active = "groq"
-    elif active == "groq" and not groq_key and gemini_key:
-        problems.append("ACTIVE_PROVIDER=groq but GROQ_API_KEY is empty; using 'gemini'.")
-        active = "gemini"
-    elif active == "gemini" and not gemini_key and groq_key:
-        problems.append("ACTIVE_PROVIDER=gemini but GEMINI_API_KEY is empty; using 'groq'.")
-        active = "groq"
+    elif active == "groq" and not groq_key and (gemini_key or openrouter_key):
+        fallback = "gemini" if gemini_key else "openrouter"
+        problems.append(f"ACTIVE_PROVIDER=groq but GROQ_API_KEY is empty; using '{fallback}'.")
+        active = fallback
+    elif active == "gemini" and not gemini_key and (groq_key or openrouter_key):
+        fallback = "groq" if groq_key else "openrouter"
+        problems.append(f"ACTIVE_PROVIDER=gemini but GEMINI_API_KEY is empty; using '{fallback}'.")
+        active = fallback
+    elif active == "openrouter" and not openrouter_key and (groq_key or gemini_key):
+        fallback = "groq" if groq_key else "gemini"
+        problems.append(
+            f"ACTIVE_PROVIDER=openrouter but OPENROUTER_API_KEY is empty; using '{fallback}'."
+        )
+        active = fallback
 
     data_raw = _get(env, "DATA_DIR")
     data_dir = Path(data_raw).expanduser().resolve() if data_raw else PROJECT_ROOT / "data"
@@ -256,6 +283,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         active_provider=active,
         groq_model=_get(env, "GROQ_MODEL", "openai/gpt-oss-120b"),
         groq_reasoning_effort=groq_effort,
+        openrouter_api_key=_get(env, "OPENROUTER_API_KEY"),
+        openrouter_model=_get(env, "OPENROUTER_MODEL", "openrouter/auto"),
+        openrouter_fallbacks=tuple(
+            part.strip()
+            for part in _get(env, "OPENROUTER_FALLBACK_MODELS").split(",")
+            if part.strip()
+        ),
         gemini_model=_get(env, "GEMINI_MODEL"),
         gemini_api_base=_get(env, "GEMINI_API_BASE"),
         max_agent_steps=_get_int(env, "MAX_AGENT_STEPS", 8, problems, 1, 25),
@@ -296,6 +330,10 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         vercel_token=_get(env, "VERCEL_TOKEN"),
         cloudflare_api_token=_get(env, "CLOUDFLARE_API_TOKEN"),
         huggingface_token=_get(env, "HF_TOKEN"),
+        youtube_client_id=_get(env, "YOUTUBE_CLIENT_ID"),
+        youtube_client_secret=_get(env, "YOUTUBE_CLIENT_SECRET"),
+        youtube_refresh_token=_get(env, "YOUTUBE_REFRESH_TOKEN"),
+        youtube_max_upload_mb=_get_int(env, "YOUTUBE_MAX_UPLOAD_MB", 128, problems, 1, 2_048),
         problems=tuple(problems),
     )
     return settings

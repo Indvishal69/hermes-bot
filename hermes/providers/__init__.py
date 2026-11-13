@@ -3,6 +3,7 @@
 from .base import LLMResult, Provider, ProviderError, split_system
 from .gemini import GeminiProvider, is_text_model, select_model
 from .groq import GroqProvider, is_chat_model, select_model as select_groq_model
+from .openrouter import OpenRouterProvider
 from .router import Router
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "split_system",
     "GeminiProvider",
     "GroqProvider",
+    "OpenRouterProvider",
     "Router",
     "is_text_model",
     "select_model",
@@ -40,7 +42,15 @@ def build_router(settings, *, session=None) -> Router:
             reasoning_effort=settings.groq_reasoning_effort,
             secrets=settings.secrets,
         )
-    order = [settings.active_provider] + [name for name in ("groq", "gemini")]
+    if settings.openrouter_api_key:
+        providers["openrouter"] = OpenRouterProvider(
+            settings.openrouter_api_key,
+            settings.openrouter_model,
+            fallbacks=settings.openrouter_fallbacks,
+            model_cache_ttl=settings.model_cache_ttl,
+            secrets=settings.secrets,
+        )
+    order = [settings.active_provider] + [name for name in ("groq", "gemini", "openrouter")]
     return Router(
         providers,
         order,
