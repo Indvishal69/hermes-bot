@@ -30,7 +30,7 @@ All modules import, and the Discord client constructs with dummy credentials
 ```
 $ python -m pytest
 .....................................................................    [100%]
-329 passed in 15.95s
+331 passed in 21.23s
 ```
 
 Coverage by area (all passing):
@@ -48,7 +48,7 @@ Coverage by area (all passing):
 | `tests/test_browsing.py` (40) | SSRF guard: non-HTTP schemes, embedded credentials, odd ports, `localhost`/`*.internal`, IP literals (loopback, RFC1918, `169.254.169.254`, `::1`), hostnames resolving to private IPs, redirect hops re-validated, redirect limit, domain allowlist; extraction (script/style stripped, title, absolute links); fetch limits (2 MB cap, non-text refusal, HTTP errors); search providers (tavily/brave/searxng parsing, 401 hint, unconfigured message); tool gating (disabled → no tools, search/browser only when usable); `browser_open` without Playwright explains the install |
 | `tests/test_connectors.py` (46) | input validation (`safe_id`/`safe_path`/`safe_repo` reject traversal, spaces, hosts); HttpClient refuses absolute URLs and adds hints on 401/404; registry: active-by-default, missing env, disable/enable persistence across a restart, settings validation and persistence, tool-spec approval flags, secret redaction in errors; real connectors against fake HTTP (GitHub repo/file/issue, Notion page-URL parsing and paragraph blocks, Slack `ok:false`, Cloudflare purge body, Render deploy URL) |
 | `tests/test_bot.py` (22) | Discord layer: no shadowing of `discord.Client` attributes; **a task survives discord.py overwriting `bot.loop` at startup**; progress edits then finish; unauthorized users ignored and audited; bot messages ignored; `!help`; unknown `!command` becomes a task; task error surfaced; rate limit; approval prompt contents; `!deny` resumes without running; provider models resolved at startup without a failure stopping the boot |
-| `tests/test_openrouter.py` (12) | model chain de-duplication; `openrouter/auto` default; fallbacks from env; primary model used; 404/403 rotates to the next model; **401 does not rotate**; 429 carries the retry hint; empty content reported; content parts joined; listing cache; retired model resolved from the chain |
+| `tests/test_openrouter.py` (14) | model chain de-duplication; `openrouter/auto` default; fallbacks from env; primary model used; 404/403 rotates to the next model; **401 does not rotate**; 429 carries the retry hint; empty content reported; content parts joined; listing cache; retired model resolved from the chain |
 | `tests/test_youtube.py` (11) | token fetched once and cached; refresh failure explains `youtube_auth.py`; channel/video parsing; **resumable upload** streams the workspace file with the right length, MIME and privacy; refuses missing/oversized files, bad privacy and paths outside the workspace; update merges existing fields; write tools marked for approval |
 | `tests/test_web_and_utils.py` (18) | `/health` 200 + payload; **no paths or secrets in the response**; unhealthy database → 503; `/ready` and `/`; redaction of key shapes; JSON extraction (plain, fenced, embedded, malformed); backoff growth and cap; truncate/chunk; human helpers |
 

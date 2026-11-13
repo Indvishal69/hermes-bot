@@ -157,3 +157,23 @@ def test_missing_model_falls_back_to_a_listed_chain_member():
     session = FakeSession(models={"data": [{"id": "acme/beta"}]})
     provider = make_provider(session, model="acme/retired", fallbacks=["acme/beta"])
     assert provider.resolve_model() == "acme/beta"
+
+
+def test_insufficient_credits_rotates_and_explains():
+    session = FakeSession(posts=[
+        (402, {"error": {"message": "Insufficient credits"}}),
+        (200, {"choices": [{"message": {"content": "from the free model"}}]}),
+    ])
+    provider = make_provider(session, model="anthropic/claude-expensive",
+                             fallbacks=["acme/free-model:free"])
+    assert provider.complete([{"role": "user", "content": "hi"}]) == "from the free model"
+    assert session.post_calls[1]["model"] == "acme/free-model:free"
+
+
+def test_credits_error_without_a_fallback_says_what_to_do():
+    session = FakeSession(posts=[(402, {"error": {"message": "Insufficient credits"}})])
+    provider = make_provider(session, model="anthropic/claude-expensive")
+    with pytest.raises(ProviderError) as excinfo:
+        provider.complete([{"role": "user", "content": "hi"}])
+    message = str(excinfo.value)
+    assert "no credits" in message and ":free" in message

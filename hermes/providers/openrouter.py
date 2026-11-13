@@ -97,6 +97,10 @@ class OpenRouterProvider(Provider):
             return MODEL          # model gated for this account
         if status == 404:
             return MODEL
+        if status == 402:
+            # "Insufficient credits" — another model in the chain may be free,
+            # so this is treated like a quota problem (rotate, then fall back).
+            return QUOTA
         if status == 429:
             return QUOTA
         if status >= 500:
@@ -211,13 +215,23 @@ class OpenRouterProvider(Provider):
                     lowered = body.lower()
                     if "model" in lowered and ("not found" in lowered or "no endpoints" in lowered):
                         kind = MODEL
+                    hint = ""
+                    if response.status_code == 402:
+                        hint = (
+                            " — this OpenRouter account has no credits for that model. "
+                            "Add credits, or pin a free model with OPENROUTER_MODEL "
+                            "(model ids ending in ':free')."
+                        )
                     last_error = ProviderError(
                         self.name,
-                        f"{model}: HTTP {response.status_code}: {body}",
+                        f"{model}: HTTP {response.status_code}{hint}: {body}",
                         kind=kind,
                         status=response.status_code,
                         retry_after=parse_retry_after(body, response.headers),
                     )
+                    if response.status_code == 402:
+                        # Credits do not appear in 1.5 seconds: rotate or fail now.
+                        last_error.retryable = False
                     # A model-level problem: switch models instead of retrying it.
                     # An auth error is about the key, so rotating cannot help.
                     if kind in (MODEL, QUOTA) and more_models:

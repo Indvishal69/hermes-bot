@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.1 — 13 November 2026
+
+* **OpenRouter 402 (insufficient credits) is now handled.** It rotates to the next
+  model in the chain — which may be a `:free` one — and, if nothing works, the error says
+  the account has no credits and points at `OPENROUTER_MODEL` with a `:free` model id.
+  Previously a 402 was an opaque "other" failure that did not rotate.
+* Tests: 2 new (331 total).
+
 ## 3.3.0 — 13 November 2026
 
 **New: OpenRouter, YouTube upload, web research, and a capability screen — plus a fix

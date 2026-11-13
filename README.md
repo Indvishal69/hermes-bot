@@ -221,7 +221,7 @@ hermes/
                              slack, platforms (render/vercel/cloudflare/hf)
   browsing/                  web fetch + SSRF guard, search, research, optional browser
 scripts/                     youtube_auth.py (one-time OAuth helper)
-tests/                       329 pytest tests (no network, no credentials needed)
+tests/                       331 pytest tests (no network, no credentials needed)
 docs/                        deployment, Gemini troubleshooting, security, upgrade notes
 ```
 
